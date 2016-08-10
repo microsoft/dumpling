@@ -36,7 +36,7 @@ namespace dumpling.db
         [Index]
         public DateTime DumpTime { get; set; }
 
-        public virtual ICollection<Artifact> Artifacts { get; set; }
+        public virtual ICollection<ManifestEntry> Artifacts { get; set; }
 
         public virtual ICollection<Property> Properties { get; set; }
 

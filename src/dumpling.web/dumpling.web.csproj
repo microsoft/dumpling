@@ -229,6 +229,8 @@
     <Content Include="Content\bootstrap-theme.min.css" />
     <Content Include="Content\bootstrap.css" />
     <Content Include="Content\bootstrap.min.css" />
+    <Content Include="Content\client\analysis.py" />
+    <Content Include="Content\client\dumpling.py" />
     <Content Include="Content\images\dload.png" />
     <Content Include="Content\images\dload_hover.png" />
     <Content Include="favicon.ico" />
@@ -237,6 +239,7 @@
     <Content Include="Content\Site.css" />
     <Content Include="Scripts\bootstrap.js" />
     <Content Include="Scripts\bootstrap.min.js" />
+    <Content Include="Content\client\triage.ini" />
     <None Include="Properties\PublishProfiles\dumpling.pubxml" />
     <None Include="Scripts\jquery-1.10.2.intellisense.js" />
     <Content Include="Scripts\jquery-1.10.2.js" />

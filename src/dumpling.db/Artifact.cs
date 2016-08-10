@@ -16,13 +16,8 @@ namespace dumpling.db
 {
     public class Artifact
     {
-        public Artifact()
-        {
-            this.Dumps = new HashSet<Dump>();
-        }
-
         [Key]
-        public string Index { get; set; }
+        public string Hash { get; set; }
 
         [Required]
         public string Format { get; set; }
@@ -31,8 +26,6 @@ namespace dumpling.db
 
         public DateTime CreatedTime { get; set; }
         
-        public virtual ICollection<Dump> Dumps { get; set; }
-
         [Timestamp]
         public byte[] Timestamp { get; set; }
     }

@@ -12,16 +12,17 @@ namespace dumpling.db
     {
         [Key]
         public int DumpId { get; set; }
-        
+
         [Key]
         public string Index { get; set; }
+        
 
         public string LocalPath { get; set; }
 
         [ForeignKey("DumpId")]
         public virtual Dump Dump { get; set; }
 
-        [ForeignKey("Index")]
+        [ForeignKey("Hash")]
         public virtual Artifact Artifact { get; set; }
 
     }
