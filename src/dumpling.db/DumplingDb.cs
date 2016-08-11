@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace dumpling.db
 {
-    public class DumplingDbContext : DbContext
+    public class DumplingDb : DbContext
     {
         public DbSet<Artifact> Artifacts { get; set; }
 

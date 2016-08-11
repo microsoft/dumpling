@@ -15,7 +15,7 @@ namespace dumpling.web.Controllers
         {
             days = days.HasValue ? days : 10;
 
-            using (var context = new DumplingDbContext())
+            using (var context = new DumplingDb())
             {
                 var minTime = DateTime.UtcNow.AddDays(days.Value * -1);
 

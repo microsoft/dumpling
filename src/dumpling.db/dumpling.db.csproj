@@ -51,7 +51,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Artifact.cs" />
-    <Compile Include="DumplingDbContext.cs" />
+    <Compile Include="DumplingDb.cs" />
     <Compile Include="Failure.cs" />
     <Compile Include="Dump.cs" />
     <Compile Include="IndexedArtifact.cs" />

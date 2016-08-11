@@ -19,7 +19,7 @@ namespace dumpling.db
     {
         public Dump()
         {
-            this.Artifacts = new HashSet<Artifact>();
+            this.ManifestEntries = new HashSet<ManifestEntry>();
 
             this.Properties = new HashSet<Property>();
         }
@@ -36,7 +36,7 @@ namespace dumpling.db
         [Index]
         public DateTime DumpTime { get; set; }
 
-        public virtual ICollection<ManifestEntry> Artifacts { get; set; }
+        public virtual ICollection<ManifestEntry> ManifestEntries { get; set; }
 
         public virtual ICollection<Property> Properties { get; set; }
 
