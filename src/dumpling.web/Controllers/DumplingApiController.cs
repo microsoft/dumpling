@@ -1,4 +1,7 @@
 ﻿using dumpling.db;
+using dumpling.web.Storage;
+using FileFormats;
+using FileFormats.ELF;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -6,7 +9,9 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
@@ -17,6 +22,22 @@ namespace dumpling.web.Controllers
     public class DumplingApiController : ApiController
     {
         private const int BUFF_SIZE = 1024 * 8;
+
+
+        [Route("api/client/scripts")]
+        [HttpGet]
+        public HttpResponseMessage GetClientTools([FromUri] string filename)
+        {
+            string path = HttpContext.Current.Server.MapPath("~/Content/client/" + filename);
+
+            HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK);
+            var stream = new FileStream(path, FileMode.Open);
+            result.Content = new StreamContent(stream);
+            result.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            result.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment") { FileName = filename };
+            return result;
+
+        }
 
         [Route("api/dumplings/{dumplingId:int}")]
         [HttpGet]
@@ -55,7 +76,7 @@ namespace dumpling.web.Controllers
 
         [Route("api/artifacts/uploads/{hash}")]
         [HttpPost]
-        public async Task UploadArtifact(string hash, [FromUri] int? dumplingId = null, [FromUri] string localpath = null, CancellationToken cancelToken = default(CancellationToken))
+        public async Task UploadArtifact(string hash, [FromUri] string localpath, [FromUri] int? dumplingId = null, CancellationToken cancelToken = default(CancellationToken))
         {
             using (DumplingDb dumplingDb = new DumplingDb())
             {
@@ -79,10 +100,7 @@ namespace dumpling.web.Controllers
                 //if the file doesn't already exist in the database we need to save it and index it
                 if (artifact == null)
                 {
-
-
-
-
+                    await UploadAndStoreArtifactAsync(Path.GetFileName(localpath).ToLowerInvariant(), hash, dumplingDb, cancelToken);
 
                     //find all DumpArtifacts with the specified index and update their Hash
                     foreach (var d in dumplingDb.DumpArtifacts.Where(da => da.Index == artifact.Index && da.Hash == null))
@@ -117,89 +135,189 @@ namespace dumpling.web.Controllers
             throw new NotImplementedException();
         }
         
-        private async Task<Artifact> UploadArtifactAsync(string expectedHash, DumplingDb dumplingDb, CancellationToken cancelToken)
+        private async Task<Artifact> UploadAndStoreArtifactAsync(string fileName, string expectedHash, DumplingDb dumplingDb, CancellationToken cancelToken)
         {
-            //upload the content to a temp file, this temp file will be deleted when the file is closed
-            using (var compressed = await UploadContentToTempFileAsync(cancelToken))
+            using (var artifactUpload = new ArtifactUploader())
             {
-                //decompress the file and 
-                using (var decompressed = CreateTempFile())
+                using (var requestStream = await Request.Content.ReadAsStreamAsync())
                 {
-                    var hash = await ComputeHashAndDecompressAsync(compressed, decompressed);
+                    await artifactUpload.UploadStreamAsync(requestStream, fileName, cancelToken);
+                }
 
-                    //if the hash doesn't match the expected hash throw
-                    if (hash != expectedHash)
-                    {
-                        throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The given hash did not match the SHA1 hash of the uploaded file"));
-                    }
+                //if the hash doesn't match the expected hash throw
+                if (artifactUpload.Hash != expectedHash)
+                {
+                    throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The given hash did not match the SHA1 hash of the uploaded file"));
+                }
 
-                    var artifact = new Artifact() { Hash = hash, UploadTime = DateTime.UtcNow};
+                var artifact = new Artifact
+                {
+                    Hash = artifactUpload.Hash,
+                    Index = artifactUpload.Index,
+                    Format = artifactUpload.Format,
+                    UploadTime = DateTime.UtcNow
+                };
 
-                    //upload the compressed file to blob storage
-                    compressed.Position = 0;
+                //otherwise create the file entry in the db
+                dumplingDb.Artifacts.Add(artifact);
 
-                    //calculate the symstore index of the file
+                //upload the artifact to blob storage
+                await DumplingStorageClient.StoreArtifactAsync(artifactUpload.Compressed, artifactUpload.Hash);
 
-                    return artifact;
+                return artifact;
+            }
+        }
+        
+        private class ArtifactUploader : IDisposable
+        {
+            public Stream Compressed { get; private set; }
+
+            public Stream Decompressed { get; private set; }
+            
+            public string Hash { get; private set; }
+
+            public string Index { get; private set; }
+
+            public string Format { get; private set; }
+
+            public string FileName { get; private set; }
+
+            public async Task UploadStreamAsync(Stream stream, string filename, CancellationToken cancelToken)
+            {
+                FileName = filename.ToLowerInvariant();
+
+                Compressed = CreateTempFile();
+
+                await stream.CopyToAsync(Compressed, BUFF_SIZE, cancelToken);
+
+                Compressed.Position = 0;
+
+                Decompressed = CreateTempFile();
+
+                await DecompAndHashAsync(cancelToken);
+
+                if(!cancelToken.IsCancellationRequested)
+                {
+                    ComputeFormatAndIndex();
                 }
             }
-        }
-
-        private async Task<Stream> UploadContentToTempFileAsync(CancellationToken cancelToken)
-        {
-            //get the file from the content
-            using (var requestStream = await Request.Content.ReadAsStreamAsync())
+            
+            public void Dispose()
             {
+                if (this.Compressed != null)
+                {
+                    Compressed.Close();
+                    Compressed.Dispose();
+                }
+
+                if(this.Decompressed != null)
+                {
+                    Decompressed.Close();
+                    Decompressed.Dispose();
+                }
+            }
+
+            private void ComputeFormatAndIndex()
+            {
+                string index;
+                if(TryGetElfIndex(Decompressed, FileName, out index))
+                {
+                    Format = "elf";
+                }
+                else
+                {
+                    Format = "unknown";
+
+                    index = GetSha1Index(FileName, Hash);
+                }
+
+                Index = index;
+            }
+
+            private static bool TryGetElfIndex(Stream stream, string filename, out string index)
+            {
+                index = null;
+
+                try
+                {
+                    var elf = new ELFFile(new StreamAddressSpace(stream));
+
+                    if (!elf.Ident.IsIdentMagicValid.Check())
+                    {
+                        return false;
+                    }
+
+                    if (elf.BuildID == null || elf.BuildID.Length != 20)
+                    {
+                        return false;
+                    }
+
+                    var key = new StringBuilder();
+                    key.Append(filename);
+                    key.Append("/elf-buildid-");
+                    key.Append(string.Concat(elf.BuildID.Select(b => b.ToString("x2"))).ToLowerInvariant());
+                    key.Append("/");
+                    key.Append(filename);
+                    index = key.ToString();
+
+                    return true;
+                }
+                catch (InputParsingException)
+                {
+                    return false;
+                }
+
+            }
+
+            private static string GetSha1Index(string filename, string hash)
+            {
+                StringBuilder index = new StringBuilder();
+
+                index.Append(filename);
+                index.Append("/");
+                index.Append("sha1-");
+                index.Append(hash);
+                index.Append("/");
+                index.Append(filename);
+                return index.ToString();
+            }
+
+            private async Task DecompAndHashAsync(CancellationToken cancelToken)
+            {
+                using (var sha1 = SHA1.Create())
+                using (var gzStream = new GZipStream(Compressed, CompressionMode.Decompress, true))
+                {
+                    var buff = new byte[BUFF_SIZE];
+
+                    int cbyte;
+
+                    while ((cbyte = await gzStream.ReadAsync(buff, 0, buff.Length)) > 0 && !cancelToken.IsCancellationRequested)
+                    {
+                        sha1.TransformBlock(buff, 0, cbyte, buff, 0);
+
+                        await Decompressed.WriteAsync(buff, 0, cbyte);
+                    }
+
+                    if (!cancelToken.IsCancellationRequested)
+                    {
+                        sha1.TransformFinalBlock(buff, 0, 0);
+
+                        Hash = string.Concat(sha1.Hash.Select(b => b.ToString("x2"))).ToLowerInvariant();
+                    }
+                }
+                
+            }
+            
+            private Stream CreateTempFile()
+            {
+                string root = HttpContext.Current.Server.MapPath("~/App_Data");
+
+                string tempPath = Path.Combine(root, Path.GetTempFileName());
+
                 //this file is not disposed of here b/c it is deleted on close
                 //callers of this method are responsible for disposing the file
-                var tempFileStream = CreateTempFile();
-                
-                await requestStream.CopyToAsync(tempFileStream, BUFF_SIZE, cancelToken);
-
-                //reset the position of the filestream to zero
-                tempFileStream.Position = 0;
-
-                return tempFileStream;
+                return File.Create(tempPath, BUFF_SIZE, FileOptions.Asynchronous | FileOptions.DeleteOnClose | FileOptions.RandomAccess);
             }
-
-        }
-
-        private Stream CreateTempFile()
-        {
-            string root = HttpContext.Current.Server.MapPath("~/App_Data");
-
-            string tempPath = Path.Combine(root, Path.GetTempFileName());
-
-            //this file is not disposed of here b/c it is deleted on close
-            //callers of this method are responsible for disposing the file
-            return File.Create(tempPath, BUFF_SIZE, FileOptions.Asynchronous | FileOptions.DeleteOnClose | FileOptions.RandomAccess);
-        }
-
-        private async Task<string> ComputeHashAndDecompressAsync(Stream compressed, Stream decompresed)
-        {
-            using (var gzStream = new GZipStream(compressed, CompressionMode.Decompress, true))
-            {
-                return await ComputeHashAndCopyAsync(gzStream, decompresed);
-            }     
-        }
-
-        private async Task<string> ComputeHashAndCopyAsync(Stream inStream, Stream outStream)
-        {
-            var sha1 = SHA1.Create();
-
-            var buff = new byte[BUFF_SIZE];
-
-            int cbyte;
-
-            while((cbyte = await inStream.ReadAsync(buff, 0, buff.Length)) > 0)
-            {
-                sha1.TransformBlock(buff, 0, cbyte, buff, 0);
-
-                await outStream.WriteAsync(buff, 0, cbyte);
-            }
-            sha1.TransformFinalBlock(buff, 0, 0);
-
-            return BitConverter.ToString(sha1.Hash).ToLowerInvariant().Replace("-", string.Empty);
         }
     }
 }
