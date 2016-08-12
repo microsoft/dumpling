@@ -8,6 +8,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -20,13 +21,13 @@ namespace dumpling.db
         public string Hash { get; set; }
 
         [Required]
+        [Index(IsUnique = true)]
+        [StringLength(450)]
+        public string Index { get; set; }
+
+        [Required]
         public string Format { get; set; }
-
-        public bool Available { get; set; }
-
-        public DateTime CreatedTime { get; set; }
         
-        [Timestamp]
-        public byte[] Timestamp { get; set; }
+        public DateTime UploadTime { get; set; }
     }
 }

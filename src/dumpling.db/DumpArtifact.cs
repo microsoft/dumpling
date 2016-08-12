@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace dumpling.db
 {
-    public class ManifestEntry
+    public class DumpArtifact
     {
         [Key]
         [Column(Order = 0)]
@@ -22,11 +22,15 @@ namespace dumpling.db
 
         public string LocalPath { get; set; }
 
+        [Timestamp]
+        public byte[] Timestamp { get; set; }
+
         [ForeignKey("DumpId")]
         public virtual Dump Dump { get; set; }
         
         [ForeignKey("Hash")]
         public virtual Artifact Artifact { get; set; }
+
 
     }
 }

@@ -54,8 +54,7 @@
     <Compile Include="DumplingDb.cs" />
     <Compile Include="Failure.cs" />
     <Compile Include="Dump.cs" />
-    <Compile Include="IndexedArtifact.cs" />
-    <Compile Include="ManifestEntry.cs" />
+    <Compile Include="DumpArtifact.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Property.cs" />
   </ItemGroup>
