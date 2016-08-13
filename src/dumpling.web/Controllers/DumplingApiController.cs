@@ -2,6 +2,7 @@
 using dumpling.web.Storage;
 using FileFormats;
 using FileFormats.ELF;
+using Microsoft.WindowsAzure.Storage.Blob;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -73,26 +74,31 @@ namespace dumpling.web.Controllers
         {
             throw new NotImplementedException();
         }
+        [Route("api/dumplings/{dumplingid:int}/artifacts/uploads/")]
+        public async Task UploadArtifact(int dumplingid, [FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken = default(CancellationToken))
+        {
 
-        [Route("api/artifacts/uploads/{hash}")]
+        }
+
+        [Route("api/artifacts/uploads")]
         [HttpPost]
-        public async Task UploadArtifact(string hash, [FromUri] string localpath, [FromUri] int? dumplingId = null, CancellationToken cancelToken = default(CancellationToken))
+        public async Task UploadArtifact([FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken = default(CancellationToken))
         {
             using (DumplingDb dumplingDb = new DumplingDb())
             {
                 Dump dumpling = null;
 
-                //if the dumplingId is not null find the dump
-                if(dumplingId.HasValue)
-                {
-                    dumpling = await dumplingDb.Dumps.FindAsync(cancelToken, dumplingId.Value);
+                ////if the dumplingId is not null find the dump
+                //if(dumplingId.HasValue)
+                //{
+                //    dumpling = await dumplingDb.Dumps.FindAsync(cancelToken, dumplingId.Value);
 
-                    //if the specified dump was not found throw an exception 
-                    if(dumpling == null)
-                    {
-                        throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The given dumplingId is invalid"));
-                    }
-                }
+                //    //if the specified dump was not found throw an exception 
+                //    if(dumpling == null)
+                //    {
+                //        throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The given dumplingId is invalid"));
+                //    }
+                //}
 
                 //check if the artifact already exists
                 var artifact = await dumplingDb.Artifacts.FindAsync(cancelToken, hash);
@@ -100,7 +106,7 @@ namespace dumpling.web.Controllers
                 //if the file doesn't already exist in the database we need to save it and index it
                 if (artifact == null)
                 {
-                    await UploadAndStoreArtifactAsync(Path.GetFileName(localpath).ToLowerInvariant(), hash, dumplingDb, cancelToken);
+                    artifact = await UploadAndStoreArtifactAsync(Path.GetFileName(localpath).ToLowerInvariant(), hash, dumplingDb, cancelToken);
 
                     //find all DumpArtifacts with the specified index and update their Hash
                     foreach (var d in dumplingDb.DumpArtifacts.Where(da => da.Index == artifact.Index && da.Hash == null))
@@ -111,28 +117,48 @@ namespace dumpling.web.Controllers
                 }
 
 
-                //if the client specified a dumpling id dumpArtifact for that dump as well
-                if (dumpling != null)
-                {
-                    var dumpArtifact = new DumpArtifact()
-                    {
-                        Hash = artifact.Hash,
-                        Index = artifact.Index,
-                        LocalPath = localpath
-                    };
+                ////if the client specified a dumpling id dumpArtifact for that dump as well
+                //if (dumpling != null)
+                //{
+                //    var dumpArtifact = new DumpArtifact()
+                //    {
+                //        Hash = artifact.Hash,
+                //        Index = artifact.Index,
+                //        LocalPath = localpath
+                //    };
 
-                    dumpling.DumpArtifacts.Add(dumpArtifact);
-                }
+                //    dumpling.DumpArtifacts.Add(dumpArtifact);
+                //}
 
                 //update the database
                 await dumplingDb.SaveChangesAsync();
             }
         }
 
-        [Route("api/artifacts/downloads/{*index}")]
-        public async Task<IHttpActionResult> GetArtifact(string index)
+        [Route("api/artifacts/downloads/{hash}")]
+        [HttpGet]
+        public async Task<HttpResponseMessage> DownloadArtifact(string hash)
         {
-            throw new NotImplementedException();
+            using (var dumplingDb = new DumplingDb())
+            {
+                var artifact = await dumplingDb.Artifacts.FindAsync(hash);
+                
+                if(artifact == null)
+                {
+                    return Request.CreateResponse(HttpStatusCode.NotFound);
+                }
+
+                using (var stream = new MemoryStream())
+                {
+                    await new CloudBlockBlob(new Uri(artifact.Url)).DownloadToStreamAsync(stream);
+
+                    HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK);
+                    result.Content = new StreamContent(stream);
+                    result.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+                    result.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment") { FileName = artifact.FileName };
+                    return result;
+                }
+            }
         }
         
         private async Task<Artifact> UploadAndStoreArtifactAsync(string fileName, string expectedHash, DumplingDb dumplingDb, CancellationToken cancelToken)
@@ -161,9 +187,14 @@ namespace dumpling.web.Controllers
                 //otherwise create the file entry in the db
                 dumplingDb.Artifacts.Add(artifact);
 
-                //upload the artifact to blob storage
-                await DumplingStorageClient.StoreArtifactAsync(artifactUpload.Compressed, artifactUpload.Hash);
+                await dumplingDb.SaveChangesAsync();
 
+                await dumplingDb.Entry(artifact).GetDatabaseValuesAsync();
+
+                //upload the artifact to blob storage
+                artifact.Url = await DumplingStorageClient.StoreArtifactAsync(artifactUpload.Compressed, artifactUpload.Hash);
+
+                await dumplingDb.SaveChangesAsync();
                 return artifact;
             }
         }
@@ -190,16 +221,24 @@ namespace dumpling.web.Controllers
 
                 await stream.CopyToAsync(Compressed, BUFF_SIZE, cancelToken);
 
+                await Compressed.FlushAsync();
+
                 Compressed.Position = 0;
 
                 Decompressed = CreateTempFile();
 
                 await DecompAndHashAsync(cancelToken);
 
+                Compressed.Position = 0;
+
                 if(!cancelToken.IsCancellationRequested)
                 {
                     ComputeFormatAndIndex();
                 }
+
+                Decompressed.Position = 0;
+
+                Compressed.Position = 0;
             }
             
             public void Dispose()
@@ -297,6 +336,8 @@ namespace dumpling.web.Controllers
 
                         await Decompressed.WriteAsync(buff, 0, cbyte);
                     }
+
+                    await Decompressed.FlushAsync();
 
                     if (!cancelToken.IsCancellationRequested)
                     {

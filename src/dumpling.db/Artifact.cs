@@ -25,6 +25,10 @@ namespace dumpling.db
         [StringLength(450)]
         public string Index { get; set; }
 
+        public string FileName { get; set; }
+
+        public string Url { get; set; }
+
         [Required]
         public string Format { get; set; }
         

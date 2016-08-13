@@ -16,11 +16,12 @@ namespace dumpling.db
 
         [Key]
         [Column(Order = 1)]
-        public string Index { get; set; }
-        
-        public string Hash { get; set; }
-
         public string LocalPath { get; set; }
+
+        public string Hash { get; set; }
+        
+        [StringLength(450)]
+        public string Index { get; set; }
 
         [Timestamp]
         public byte[] Timestamp { get; set; }

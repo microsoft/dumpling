@@ -23,6 +23,7 @@ namespace dumpling.web.Storage
         }
 
         private CloudBlobClient _blobClient;
+
         private CloudBlobContainer _artifactContainer;
 
         public static CloudBlobClient BlobClient
@@ -33,20 +34,30 @@ namespace dumpling.web.Storage
             }
         }
 
+        public static CloudBlobContainer ArtifactContainer
+        {
+            get
+            {
+                return _instance._artifactContainer;
+            }
+        }
+
         private void Initialize()
         {
             _blobClient = CloudStorageAccount.Parse(ConfigurationManager.AppSettings["StorageConnectionString"]).CreateCloudBlobClient();
 
-            _artifactContainer = BlobClient.GetContainerReference(ConfigurationManager.AppSettings["ArtifactContainer"]);
+            _artifactContainer = _blobClient.GetContainerReference(ConfigurationManager.AppSettings["ArtifactContainer"]);
 
             _artifactContainer.CreateIfNotExistsAsync().GetAwaiter().GetResult();
         }
 
-        public static async Task StoreArtifactAsync(Stream stream, string hash)
+        public static async Task<string> StoreArtifactAsync(Stream stream, string hash)
         {
             var blob = _instance._artifactContainer.GetBlockBlobReference(hash);
 
             await blob.UploadFromStreamAsync(stream);
+
+            return blob.Uri.ToString();
         }
     }
 }
