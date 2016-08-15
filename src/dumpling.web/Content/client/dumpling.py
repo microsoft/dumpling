@@ -83,8 +83,12 @@ class DumplingService:
         
         response = requests.get(url, stream=True)
 
-        for chunk in response.iter_content(8 * 1024):
-            file.write(chunk)
+        Output.Diagnostic(response.headers)
+
+        Output.Diagnostic('')
+
+        Output.Diagnostic(response)
+
         
 
 class UniqueFileList:
@@ -124,7 +128,9 @@ def HashAndCompress(fDecomp, fComp):
     return hash.hexdigest() 
 
 def QueueFileDownload(dumpSvc, hash, abspath):
-    
+    #with open(abspath, 'wb+') as file:
+    dumpSvc.DownloadArtifact(hash, None)
+
 def QueueFileUpload(dumpSvc, dumpid, abspath):
     hash = None
     tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp());
@@ -160,8 +166,9 @@ def Upload(uploadArgs, dumpSvc):
     else:
         UploadFiles(dumpSvc, args.dumpid, args.incpaths)
         
- def Download(downloadArgs, dumpSvc):
-          
+def Download(downloadArgs, dumpSvc):
+    #TODO: ERROR Handling
+    QueueFileDownload(dumpSvc, downloadArgs.hash, None)
 
 if __name__ == '__main__':
 
@@ -189,9 +196,9 @@ if __name__ == '__main__':
                                                                                                      
     download_parser.add_argument('--dumpid', type=int, help='the dumpling id of the dump to download for debugging')   
     
-    download_parser.add_argument('--hash', type=int, help='the id of the artifact to download')
+    download_parser.add_argument('--hash', type=str, help='the id of the artifact to download')
         
-    download_parser.add_argument('--outdir', type=int, help='the directory to download the spefied files to')
+    download_parser.add_argument('--outdir', type=str, help='the path to the directory to download the specified content')
 
 
 
@@ -201,8 +208,10 @@ if __name__ == '__main__':
     Output.s_squelch = args.squelch
     Output.s_logPath = args.logpath
 
-
+    dumpSvc = DumplingService('http://localhost:2399/')
     if args.command == 'upload':
-        Upload(args, DumplingService('http://localhost:2399/'))
+        Upload(args, dumpSvc)
+    elif args.command == 'download':
+        Download(args, dumpSvc)
 
 

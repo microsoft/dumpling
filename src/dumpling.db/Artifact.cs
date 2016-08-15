@@ -17,14 +17,15 @@ namespace dumpling.db
 {
     public class Artifact
     {
+        public Artifact()
+        {
+            Indexes = new HashSet<ArtifactIndex>();
+        }
+
         [Key]
+        [StringLength(40)]
         public string Hash { get; set; }
-
-        [Required]
-        [Index(IsUnique = true)]
-        [StringLength(450)]
-        public string Index { get; set; }
-
+        
         public string FileName { get; set; }
 
         public string Url { get; set; }
@@ -33,5 +34,7 @@ namespace dumpling.db
         public string Format { get; set; }
         
         public DateTime UploadTime { get; set; }
+
+        public virtual ICollection<ArtifactIndex> Indexes { get; set; }
     }
 }
