@@ -27,6 +27,8 @@ namespace dumpling.db
 
             await this.SaveChangesAsync();
 
+            await this.Entry(artifact).ReloadAsync();
+
             await UpdateIncompleteDumpArtifacts(artifact);
         }
 

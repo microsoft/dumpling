@@ -51,9 +51,9 @@ namespace dumpling.web.Storage
             _artifactContainer.CreateIfNotExistsAsync().GetAwaiter().GetResult();
         }
 
-        public static async Task<string> StoreArtifactAsync(Stream stream, string hash)
+        public static async Task<string> StoreArtifactAsync(Stream stream, string hash, string fileName)
         {
-            var blob = _instance._artifactContainer.GetBlockBlobReference(hash);
+            var blob = _instance._artifactContainer.GetBlockBlobReference(hash + "/" + fileName);
 
             await blob.UploadFromStreamAsync(stream);
 
