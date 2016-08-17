@@ -26,7 +26,10 @@ namespace dumpling.db
 
         public string Value { get; set; }
 
-        public int DumpId { get; set; }
+        [Required]
+        [Index]
+        [StringLength(40)]
+        public string DumpId { get; set; }
 
         [ForeignKey("DumpId")]
         public virtual Dump Dump { get; set; }

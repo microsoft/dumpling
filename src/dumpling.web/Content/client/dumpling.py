@@ -88,28 +88,12 @@ class DumplingService:
         Output.Diagnostic('')
 
         Output.Diagnostic(response)
-
-    def CreateDump(self, origin, displayname):
-        qargs = { 'origin': origin, 'displayname': displayname }
-        
-        url = self._dumplingUri + 'api/dumplings/create?' + urllib.urlencode(qargs)
-
-        response = requests.get(url)
-                                    
-        Output.Diagnostic('   response: %s'%(response.content))
-
-        dumpData = response.json() 
-                                                        
-        Output.Message('Created dump: %s'%dumpData['dumpId'])
-
-        return dumpData['dumpId']
-
             
 
-    def UploadDump(self, dumpid, localpath, hash, file):    
-        qargs = { 'hash': hash, 'localpath': localpath, 'dumpid': dumpid,  }
+    def UploadDump(self, localpath, hash, origin, displayname, file):    
+        qargs = { 'hash': hash, 'localpath': localpath, 'origin': origin, 'displayname': displayname  }
 
-        url = self._dumplingUri + 'api/dumplings/' + str(dumpid) + '/dumps/uploads?' + str(urllib.urlencode(qargs))
+        url = self._dumplingUri + 'api/dumplings/uploads?' + str(urllib.urlencode(qargs))
 
         Output.Message('uploading artifact %s %s'%(hash, os.path.basename(localpath)))
 
@@ -144,18 +128,20 @@ class FileTransferManager:
             self._dumpSvc.UploadArtifact(dumpid, abspath, hash, fUpld)    
         os.remove(tempPath)
     
-    def UploadDump(self, dumpid, dumppath, incpaths):
+    def UploadDump(self, dumpid, dumppath, incpaths, origin, displayname):
         #
         hash = None
-        Output.Diagnostic('compressed file size: %s Kb'%(str(os.path.getsize(dumppath) / 1024)))
+        Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(dumppath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
         with gzip.open(tempPath, 'wb') as fComp:
             with open(dumppath, 'rb') as fDecomp:
                 hash = FileTransferManager._hash_and_compress(fDecomp, fComp)
-        Output.Diagnostic('compressed file size: %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
+        Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
         with open(tempPath, 'rb') as fUpld:
-            refpaths = self._dumpSvc.UploadDump(dumpid, dumppath, hash, fUpld)  
-        self.UploadFiles(dumpid, refpaths)
+            dumpData = self._dumpSvc.UploadDump(dumppath, hash, origin, displayname, fUpld)   
+            self.UploadFiles(dumpData['dumplingId'], dumpData['refPaths'])
+        os.remove(tempPath)
+        return dumpData['dumplingId']
 
     def UploadFiles(self, dumpid, incpaths):
         #
@@ -224,9 +210,7 @@ class CommandProcesser:
             if args.displayname is None:
                 args.displayname = str('%s.%.7f'%(getpass.getuser().lower(), time.time()))
 
-            args.dumpid = self._dumpSvc.CreateDump(args.user, args.displayname)
-
-            self._filequeue.UploadDump(args.dumpid, args.dumppath, args.incpaths)
+            args.dumpid = self._filequeue.UploadDump(args.dumpid, args.dumppath, args.incpaths, args.user, args.displayname)
                     
         #if there are included paths upload them
         if not (self._args.incpaths is None or len(self._args.incpaths) == 0):
@@ -279,7 +263,7 @@ if __name__ == '__main__':
     Output.s_squelch = args.squelch
     Output.s_logPath = args.logpath
 
-    DumplingService.s_inst = DumplingService('http://localhost:2399/')
+    DumplingService.s_inst = DumplingService('https://dumpling-dev.azurewebsites.net/')
     filequeue = FileTransferManager(DumplingService.s_inst)
     cmdProcesser = CommandProcesser(args, filequeue, DumplingService.s_inst)
     cmdProcesser.Process()
