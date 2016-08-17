@@ -12,16 +12,19 @@ namespace dumpling.db
     {
         [Key]
         [Column(Order = 0)]
-        public int DumpId { get; set; }
+        public string DumpId { get; set; }
 
         [Key]
         [Column(Order = 1)]
+        [StringLength(450)]
         public string LocalPath { get; set; }
 
         public string Hash { get; set; }
         
         [StringLength(450)]
         public string Index { get; set; }
+
+        public bool DebugCritical { get; set; }
 
         [Timestamp]
         public byte[] Timestamp { get; set; }

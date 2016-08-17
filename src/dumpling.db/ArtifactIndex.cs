@@ -11,6 +11,7 @@ namespace dumpling.db
     public class ArtifactIndex
     {
         [Key]
+        [StringLength(450)]
         public string Index { get; set; }
 
         [Required]

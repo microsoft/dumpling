@@ -180,7 +180,7 @@
                 <tr style="border-top:thin solid #FFCCC5;">
                     <td class="failure_hash"><p>@Html.Encode(failure)</p></td>
                     <td class="hitcount" rowspan="2" align="center" valign="middle">
-                        <p>@Html.Encode((ViewData[failure] as string[]).Count())</p>
+                        <p>@Html.Encode((ViewData[failure ?? "UNTRIAGED"] as dumpling.db.Dump[]).Count())</p>
                     </td>
                 </tr>
                 <tr style="border-top:thin solid #FFCCC5;vertical-align:baseline" onmouseover="">

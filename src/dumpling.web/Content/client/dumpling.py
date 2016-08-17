@@ -34,11 +34,11 @@ class Output:
     @staticmethod
     def Message(output):
         if not bool(Output.s_squelch):
-            OuputController.Print(output)
+            Output.Print(output)
 
     @staticmethod
     def Critical(output):
-        OuputController.Print(output)
+        Output.Print(output)
 
     @staticmethod
     def Print(output):
@@ -67,7 +67,7 @@ class DumplingService:
 
         url = self._dumplingUri + 'api/artifacts/uploads?' + urllib.urlencode(qargs)
 
-        Output.Message('uploading artifact %s %s'%(localpath, hash))
+        Output.Message('uploading artifact %s %s'%(hash, os.path.basename(localpath)))
 
         Output.Diagnostic('   url: %s'%(url))
 
@@ -88,38 +88,22 @@ class DumplingService:
         Output.Diagnostic('')
 
         Output.Diagnostic(response)
-
-    def CreateDump(self, origin, displayname):
-        qargs = { 'origin': origin, 'displayname': displayname }
-        
-        url = self._dumplingUri + 'api/dumplings/create?' + urllib.urlencode(qargs)
-
-        response = requests.get(url)
-
-        dumpData = repsone.json() 
-        
-        Output.Message('Created dump: %s'%dumpData.dumpId)
-
-        Output.Diagnostic('raw dump data: %s'%dumpData)
-
-        return dumpData.DumpId
-
             
 
-    def UploadDump(self, dumpid, localpath, hash, file):    
-        qargs = { 'hash': hash, 'localpath': localpath, 'dumpid': dumpid,  }
+    def UploadDump(self, localpath, hash, origin, displayname, file):    
+        qargs = { 'hash': hash, 'localpath': localpath, 'origin': origin, 'displayname': displayname  }
 
-        url = self._dumplingUri + 'api/dumplings/' + dumpid + '/dumps/uploads?' + urllib.urlencode(qargs)
+        url = self._dumplingUri + 'api/dumplings/uploads?' + str(urllib.urlencode(qargs))
 
-        Output.Message('uploading artifact %s %s'%(localpath, hash))
+        Output.Message('uploading artifact %s %s'%(hash, os.path.basename(localpath)))
 
         Output.Diagnostic('   url: %s'%(url))
 
         response = requests.post(url, data=file)
              
         Output.Diagnostic('   response: %s'%(response.content))
-
-        response.raise_for_status()        
+        
+        return response.json()
 
 
         
@@ -134,25 +118,30 @@ class FileTransferManager:
 
     def QueueFileUpload(self, dumpid, abspath):
         hash = None
+        Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(abspath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
         with gzip.open(tempPath, 'wb') as fComp:
             with open(abspath, 'rb') as fDecomp:
-                hash = _hash_and_compress(fDecomp, fComp)
+                hash = FileTransferManager._hash_and_compress(fDecomp, fComp)
+        Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
         with open(tempPath, 'rb') as fUpld:
             self._dumpSvc.UploadArtifact(dumpid, abspath, hash, fUpld)    
         os.remove(tempPath)
     
-    def UploadDump(self, dumpid, dumppath, incpaths):
+    def UploadDump(self, dumpid, dumppath, incpaths, origin, displayname):
         #
         hash = None
+        Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(dumppath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
         with gzip.open(tempPath, 'wb') as fComp:
-            with open(abspath, 'rb') as fDecomp:
-                hash = _hash_and_compress(fDecomp, fComp)
+            with open(dumppath, 'rb') as fDecomp:
+                hash = FileTransferManager._hash_and_compress(fDecomp, fComp)
+        Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
         with open(tempPath, 'rb') as fUpld:
-            dumpArtifacts = self._dumpSvc.UploadDump(dumpid, abspath, hash, fUpld)  
-        refpaths = [da.path for da in dumpArtfacts.iteritems()]
-        self.UploadFiles(dumpid, refpaths)
+            dumpData = self._dumpSvc.UploadDump(dumppath, hash, origin, displayname, fUpld)   
+            self.UploadFiles(dumpData['dumplingId'], dumpData['refPaths'])
+        os.remove(tempPath)
+        return dumpData['dumplingId']
 
     def UploadFiles(self, dumpid, incpaths):
         #
@@ -168,6 +157,7 @@ class FileTransferManager:
 
     def _add_upload_paths(self, incpaths):
         for p in incpaths:
+            p = p.rstrip('\\')
             abspath = os.path.abspath(p)
             if os.path.isdir(abspath):
                 for dirpath, dirnames, filenames in os.walk(abspath):
@@ -175,7 +165,7 @@ class FileTransferManager:
                         subpath = os.path.join(dirpath, name)
                         if self._add_upload_path(subpath):
                             yield subpath
-            else:
+            elif os.path.isfile(abspath):
                 if self._add_upload_path(abspath):
                     yield abspath
 
@@ -195,9 +185,15 @@ class FileTransferManager:
 
 class CommandProcesser:
     def __init__(self, args, filequeue, dumpSvc):
-        self._args = { }
+        self._args = args
         self._dumpSvc = dumpSvc
         self._filequeue = filequeue
+
+    def Process(self):
+        if self._args.command == 'upload':
+            self.Upload()
+        elif self._args.command == 'download':
+            self.Download()
 
     def Upload(self):
         #if nothing was specified to upload
@@ -211,21 +207,18 @@ class CommandProcesser:
         #if dumppath was specified call create dump and upload dump
         if args.dumppath is not None:
 
-            dumpArtifacts = UploadDump(args.dumpid, args.dumppath, args.incpaths)
+            if args.displayname is None:
+                args.displayname = str('%s.%.7f'%(getpass.getuser().lower(), time.time()))
 
-            incpaths = [da.LocalPath for da in dumpArtifacts.iteritems()]
-
-            UploadFiles
-                
-                
+            args.dumpid = self._filequeue.UploadDump(args.dumpid, args.dumppath, args.incpaths, args.user, args.displayname)
                     
         #if there are included paths upload them
         if not (self._args.incpaths is None or len(self._args.incpaths) == 0):
-            UploadFiles(args.dumpid, args.incpaths)
+            self._filequeue.UploadFiles(args.dumpid, args.incpaths)
         
-    def Download(downloadArgs):
+    def Download(self):
         #TODO: ERROR Handling
-        QueueFileDownload(downloadArgs.hash, None)
+        self._filequeue.QueueFileDownload(self._args.hash, None)
 
 if __name__ == '__main__':
 
@@ -247,11 +240,11 @@ if __name__ == '__main__':
                                                                                                      
     upload_parser.add_argument('--dumpid', type=int, help='the dumpling id the specified files are to be associated with')
                                                 
-    upload_parser.add_argument('--displayname', type=str, default='%s.%.7f'%(getpass.getuser().lower(), time.time), help='the name to be displayed in reports for the uploaded dump.  This argument is ignored unless --dumppath is specified')
+    upload_parser.add_argument('--displayname', type=str, default=None, help='the name to be displayed in reports for the uploaded dump.  This argument is ignored unless --dumppath is specified')
 
     upload_parser.add_argument('--user', type=str, default=getpass.getuser().lower(), help='The username to pass to the dumpling service.  This argument is ignored unless --dumppath is specified')
 
-    upload_parser.add_argument('--incpaths', nargs='*', type=str, help='paths to files or directories to be included upload')
+    upload_parser.add_argument('--incpaths', nargs='*', type=str, help='paths to files or directories to be included in the upload')
 
    
     download_parser = subparsers.add_parser('download', parents=[outputparser], help='command used for downloading dumps and files from the dumpling service')    
@@ -270,11 +263,10 @@ if __name__ == '__main__':
     Output.s_squelch = args.squelch
     Output.s_logPath = args.logpath
 
-    DumplingService.s_inst = DumplingService('http://localhost:2399/')
+    DumplingService.s_inst = DumplingService('https://dumpling-dev.azurewebsites.net/')
+    filequeue = FileTransferManager(DumplingService.s_inst)
+    cmdProcesser = CommandProcesser(args, filequeue, DumplingService.s_inst)
+    cmdProcesser.Process()
 
-    if args.command == 'upload':
-        Upload(args)
-    elif args.command == 'download':
-        Download(args)
 
 

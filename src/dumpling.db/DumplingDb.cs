@@ -36,7 +36,7 @@ namespace dumpling.db
         {
             foreach (var index in artifact.Indexes)
             {
-                await this.Database.ExecuteSqlCommandAsync(DUMPARTIFACT_UPDATE_QUERY, artifact.Hash, index);
+                await this.Database.ExecuteSqlCommandAsync(DUMPARTIFACT_UPDATE_QUERY, artifact.Hash, index.Index);
             }
         }
 

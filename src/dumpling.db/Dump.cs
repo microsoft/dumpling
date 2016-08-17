@@ -24,7 +24,9 @@ namespace dumpling.db
             this.Properties = new HashSet<Property>();
         }
 
-        public int DumpId { get; set; }
+        [Key]
+        [StringLength(40)]
+        public string DumpId { get; set; }
 
         public string DisplayName { get; set; }
         
@@ -39,7 +41,7 @@ namespace dumpling.db
         public virtual ICollection<DumpArtifact> DumpArtifacts { get; set; }
 
         public virtual ICollection<Property> Properties { get; set; }
-
+        
         [ForeignKey("FailureHash")]
         public virtual Failure Failure { get; set; }
 

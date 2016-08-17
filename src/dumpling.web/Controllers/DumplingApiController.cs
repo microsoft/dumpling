@@ -2,9 +2,13 @@
 using dumpling.web.Storage;
 using FileFormats;
 using FileFormats.ELF;
+using FileFormats.PDB;
+using FileFormats.PE;
 using Microsoft.WindowsAzure.Storage.Blob;
 using System;
 using System.Collections.Generic;
+using System.Data.Entity.Infrastructure;
+using System.Data.Entity.Validation;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -24,6 +28,7 @@ namespace dumpling.web.Controllers
     {
         private const int BUFF_SIZE = 1024 * 8;
 
+        public bool AllowDumplicateDumps = true;
 
         [Route("api/client/scripts")]
         [HttpGet]
@@ -51,53 +56,79 @@ namespace dumpling.web.Controllers
                 return dump == null ? new DumpArtifact[] { } : dump.DumpArtifacts.ToArray();
             }
         }
-
-        [Route("api/dumplings/create")]
-        [HttpGet]
-        public async Task<Dump> CreateDumpling([FromUri] string origin, [FromUri] string displayName, CancellationToken cancelToken)
+        
+        public class UploadDumpResponse
         {
-            using (DumplingDb dumplingDb = new DumplingDb())
-            {
-                var dump = new Dump() { Origin = origin, DisplayName = displayName, DumpTime = DateTime.UtcNow };
-
-                dumplingDb.Dumps.Add(dump);
-
-                await dumplingDb.SaveChangesAsync(cancelToken);
-
-                return dump;
-            }
+            public string dumplingId { get; set; }
+            public string[] refPaths { get; set; }
         }
 
-        [Route("api/dumplings/{dumplingid:int}/dumps/uploads/")]
+        [Route("api/dumplings/uploads/")]
         [HttpPost]
-        public async Task<IEnumerable<DumpArtifact>> UploadDump(int dumplingid, [FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
+        public async Task<UploadDumpResponse> UploadDump([FromUri] string hash, [FromUri] string localpath, [FromUri] string origin, [FromUri] string displayName, CancellationToken cancelToken)
         {
             using (DumplingDb dumplingDb = new DumplingDb())
             {
-                var dumpling = await dumplingDb.Dumps.FindAsync(cancelToken, dumplingid);
+                var dumpling = await dumplingDb.Dumps.FindAsync(cancelToken, hash);
 
                 //if the specified dump was not found throw an exception 
-                if (dumpling == null)
+                if (dumpling != null)
                 {
-                    throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The given dumplingId is invalid"));
+                    return new UploadDumpResponse() { dumplingId = dumpling.DumpId, refPaths = new string[] { } };
                 }
-                
-                using (var uploader = new DumpArtifactUploader(dumplingid))
-                {
-                    await UploadDumpArtifactAsync(uploader, dumplingDb, dumpling, hash, localpath, cancelToken);
 
-                    foreach(var dumpArtifact in uploader.LoadedArtifacts)
+                var clientFilesNeeded = new List<string>();
+
+                dumpling = new Dump() { DumpId = hash, Origin = origin, DisplayName = displayName, DumpTime = DateTime.UtcNow };
+
+                dumplingDb.Dumps.Add(dumpling);
+
+                try
+                {
+                    await dumplingDb.SaveChangesAsync();
+                }
+                catch (DbEntityValidationException)
+                {
+                    dumpling = await dumplingDb.Dumps.FindAsync(cancelToken, hash);
+
+                    //if the specified dump was not found throw an exception 
+                    if (dumpling != null)
                     {
+                        return new UploadDumpResponse() { dumplingId = dumpling.DumpId, refPaths = new string[] { } };
+                    }
+
+                    throw;
+                }
+
+                using (var uploader = new DumpArtifactUploader())
+                {
+                    await UploadDumpArtifactAsync(uploader, dumplingDb, dumpling, hash, localpath, true, cancelToken);
+
+                    foreach (var dumpArtifact in uploader.GetLoadedModules(dumpling.DumpId))
+                    {
+                        var artifactIndex = await dumplingDb.ArtifactIndexes.FindAsync(dumpArtifact.Index);
+
+                        if(artifactIndex != null)
+                        {
+                            dumpArtifact.Hash = artifactIndex.Hash;
+                        }
+                        else
+                        {
+                            clientFilesNeeded.Add(dumpArtifact.LocalPath);
+                        }
+
                         dumpling.DumpArtifacts.Add(dumpArtifact);
                     }
+
+                    await dumplingDb.SaveChangesAsync();
                 }
 
-                return dumpling.DumpArtifacts;
+                return new UploadDumpResponse() { dumplingId = dumpling.DumpId, refPaths = clientFilesNeeded.ToArray() };
             }
         }
 
-        [Route("api/dumplings/{dumplingid:int}/artifacts/uploads/")]
-        public async Task UploadArtifact(int dumplingid, [FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
+        [Route("api/dumplings/{dumplingid}/artifacts/uploads/")]
+        public async Task UploadArtifact(string dumplingid, [FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
         {
             using (DumplingDb dumplingDb = new DumplingDb())
             {
@@ -111,17 +142,7 @@ namespace dumpling.web.Controllers
 
                 using (var uploader = new ArtifactUploader())
                 {
-                    var artifact = await UploadArtifactAsync(uploader, dumplingDb, hash, localpath, cancelToken);
-
-
-                    var dumpArtifact = new DumpArtifact()
-                    {
-                        Hash = artifact.Hash,
-                        Index = artifact.Indexes.FirstOrDefault()?.Index,
-                        LocalPath = localpath
-                    };
-
-                    dumpling.DumpArtifacts.Add(dumpArtifact);
+                    var artifact = await UploadDumpArtifactAsync(uploader, dumplingDb, dumpling, hash, localpath, false, cancelToken);
                 }
 
                 await dumplingDb.SaveChangesAsync();
@@ -150,7 +171,7 @@ namespace dumpling.web.Controllers
 
         [Route("api/artifacts/downloads/{hash}")]
         [HttpGet]
-        public async Task<HttpResponseMessage> DownloadArtifact(string hash)
+        public async Task<IHttpActionResult> DownloadArtifact(string hash)
         {
             using (var dumplingDb = new DumplingDb())
             {
@@ -158,24 +179,35 @@ namespace dumpling.web.Controllers
 
                 if (artifact == null)
                 {
-                    return Request.CreateResponse(HttpStatusCode.NotFound);
+                    return (IHttpActionResult)Request.CreateResponse(HttpStatusCode.NotFound);
                 }
 
                 var stream = new MemoryStream();
 
                 var blob = DumplingStorageClient.BlobClient.GetBlobReferenceFromServer(new Uri(artifact.Url));
 
-                await blob.DownloadToStreamAsync(stream);
+                var sasConstraints = new SharedAccessBlobPolicy();
+                sasConstraints.SharedAccessStartTime = DateTime.UtcNow;
+                sasConstraints.SharedAccessExpiryTime = DateTime.UtcNow.AddHours(1);
+                sasConstraints.Permissions = SharedAccessBlobPermissions.Read;
+                
+                var blobToken = blob.GetSharedAccessSignature(sasConstraints);
+                var tempAccessUrl = artifact.Url + blobToken;
+                return (IHttpActionResult)this.Redirect(tempAccessUrl);
 
-                HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK);
-                result.Content = new StreamContent(stream);
-                result.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-                result.Content.Headers.Add("FileName", artifact.FileName);
-                return result;
+
+
+                //await blob.DownloadToStreamAsync(stream);
+
+                //HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK);
+                //result.Content = new StreamContent(stream);
+                //result.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+                //result.Content.Headers.Add("FileName", artifact.FileName);
+                //return result;
             }
         }
 
-        private async Task<Artifact> UploadDumpArtifactAsync(ArtifactUploader uploader, DumplingDb dumplingDb, Dump dump, string hash, string localpath, CancellationToken cancelToken)
+        private async Task<Artifact> UploadDumpArtifactAsync(ArtifactUploader uploader, DumplingDb dumplingDb, Dump dump, string hash, string localpath, bool debugCritical, CancellationToken cancelToken)
         {
             var artifact = await UploadArtifactAsync(uploader, dumplingDb, hash, localpath, cancelToken);
 
@@ -184,7 +216,8 @@ namespace dumpling.web.Controllers
                 DumpId = dump.DumpId,
                 Hash = artifact.Hash,
                 Index = artifact.Indexes.FirstOrDefault()?.Index,
-                LocalPath = localpath
+                LocalPath = localpath,
+                DebugCritical = debugCritical
             };
 
             dump.DumpArtifacts.Add(dumpArtifact);
@@ -241,7 +274,7 @@ namespace dumpling.web.Controllers
             await dumplingDb.Entry(artifact).GetDatabaseValuesAsync();
 
             //upload the artifact to blob storage
-            artifact.Url = await DumplingStorageClient.StoreArtifactAsync(uploader.Compressed, uploader.Hash, uploader.FileName);
+            artifact.Url = await DumplingStorageClient.StoreArtifactAsync(uploader.Compressed, uploader.Hash, uploader.CompressedFileName);
 
             await dumplingDb.SaveChangesAsync();
             return artifact;
@@ -249,34 +282,34 @@ namespace dumpling.web.Controllers
         
         private class DumpArtifactUploader : ArtifactUploader
         {
-            private int _dumpId;
+            private object _fileFormatReader;
 
-            public DumpArtifactUploader(int dumpId)
+            public DumpArtifactUploader()
             {
-                _dumpId = dumpId;
             }
 
-            public IList<DumpArtifact> LoadedArtifacts { get; private set; }
+            public IList<DumpArtifact> GetLoadedModules(string dumpId)
+            {
+                switch (this.Format)
+                {
+                    case "elfcore":
+                        return ReadELFCoreLoadedModules(dumpId);
+                    default:
+                        return null;
+                }
+            }
 
             protected override void ComputeFormatAndIndex()
             {
-                IList<DumpArtifact> artifacts;
-
-                if (TryReadELFCoreFileFormat(out artifacts))
+                if (IsELFCore())
                 {
                     Format = "elfcore";
                 }
-                else
-                {
-                    artifacts = new DumpArtifact[] { };
-                }
-
+                
                 Index = BuildIndexFromModuleUUID(Hash, SHA1_INDEXSTYLE_ID, FileName);
-
-                LoadedArtifacts = artifacts;
             }
 
-            private bool TryReadELFCoreFileFormat(out IList<DumpArtifact> dumpArtifacts)
+            private bool IsELFCore()
             {
                 try
                 {
@@ -285,28 +318,52 @@ namespace dumpling.web.Controllers
                     //get this property so that it will force the validation of the file format before we allocate anything else
                     var fileTable = coreFile.FileTable;
 
-                    dumpArtifacts = new List<DumpArtifact>();
-
-                    foreach (var image in coreFile.LoadedImages)
-                    {
-                        string buildId = null;
-
-                        try
-                        {
-                            buildId = string.Concat(image.Image.BuildID.Select(b => b.ToString("x2"))).ToLowerInvariant();
-                        }
-                        catch { }
-
-                        dumpArtifacts.Add(new DumpArtifact() { DumpId = _dumpId, LocalPath = image.Path, Index = buildId });
-                    }
+                    _fileFormatReader = coreFile;
 
                     return true;
                 }
                 catch
                 {
-                    dumpArtifacts = null;
-
                     return false;
+                }
+            }
+
+            private IList<DumpArtifact> ReadELFCoreLoadedModules(string dumpId)
+            {
+                try
+                {
+                    var coreFile = _fileFormatReader as ELFCoreFile;
+
+                    //get this property so that it will force the validation of the file format before we allocate anything else
+                    var fileTable = coreFile.FileTable;
+
+                    var dumpArtifacts = new List<DumpArtifact>();
+
+                    foreach (var image in coreFile.LoadedImages)
+                    {
+                        string index = null;
+
+                        try
+                        {
+                            //this call will throw an exception if the loaded image doesn't have a build id.  
+                            //Unfortunately there is no way to check if build id exists without ex
+                            var buildId = image.Image.BuildID;
+
+                            if (buildId != null)
+                            {
+                                index = BuildIndexFromModuleUUID(buildId, ELF_INDEXSTYLE_ID, Path.GetFileName(image.Path));
+                            }
+                        }
+                        catch { }
+
+                        dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = image.Path, Index = index, DebugCritical = true });
+                    }
+
+                    return dumpArtifacts;
+                }
+                catch
+                {
+                    return null;
                 }
             }
             
@@ -318,7 +375,7 @@ namespace dumpling.web.Controllers
             public Stream Compressed { get; protected set; }
 
             public Stream Decompressed { get; protected set; }
-            
+
             public string Hash { get; protected set; }
 
             public string Index { get; protected set; }
@@ -327,10 +384,12 @@ namespace dumpling.web.Controllers
 
             public string FileName { get; protected set; }
 
+            public string CompressedFileName { get { return FileName + ".gz"; } }
+
             public async Task UploadStreamAsync(Stream stream, string filename, CancellationToken cancelToken)
             {
                 FileName = filename.ToLowerInvariant();
-
+                
                 Compressed = CreateTempFile();
 
                 await stream.CopyToAsync(Compressed, BUFF_SIZE, cancelToken);
@@ -377,6 +436,10 @@ namespace dumpling.web.Controllers
                 {
                     Format = "elf";
                 }
+                else if(TryGetPEIndex(Decompressed, FileName, out index))
+                {
+                    Format = "pe";
+                }
                 else
                 {
                     Format = "unknown";
@@ -387,8 +450,10 @@ namespace dumpling.web.Controllers
                 Index = index;
             }
 
-            protected const string ELF_INDEXSTYLE_ID = "sha1";
-            protected const string SHA1_INDEXSTYLE_ID = "elf-buildid";
+            protected const string SHA1_INDEXSTYLE_ID = "sha1-";
+            protected const string ELF_INDEXSTYLE_ID = "elf-buildid-";
+            protected const string PE_INDEXSTYLE_ID = "";
+            protected const string PDB_INDEXSTYLE_ID = "";
 
             protected static string BuildIndexFromModuleUUID(byte[] uuid, string indexStyleId, string filename)
             {
@@ -406,14 +471,14 @@ namespace dumpling.web.Controllers
                 key.Append("/");
 
                 key.Append(indexStyleId);
-
-                key.Append("-");
-
+                
                 key.Append(uuid);
 
                 key.Append("/");
 
                 key.Append(filename);
+
+                key.Append(".gz");
 
                 return key.ToString();
             }
@@ -447,6 +512,61 @@ namespace dumpling.web.Controllers
 
             }
             
+            private static bool TryGetPEIndex(Stream stream, string filename, out string index)
+            {
+                index = null;
+                string extension = Path.GetExtension(filename);
+                if (extension != ".dll" && extension != ".exe")
+                {
+                    return false;
+                }
+
+                StreamAddressSpace fileAccess = new StreamAddressSpace(stream);
+                try
+                {
+                    PEFile reader = new PEFile(fileAccess);
+                    if (!reader.HasValidDosSignature.Check())
+                    {
+                        return false;
+                    }
+
+                    string key = reader.Timestamp.ToString("x").ToLowerInvariant() + reader.SizeOfImage.ToString("x").ToLowerInvariant();
+
+                    index = BuildIndexFromModuleUUID(key, PE_INDEXSTYLE_ID, filename);
+
+                    return true;
+                }
+                catch (InputParsingException)
+                {
+                    return false;
+                }
+            }
+
+            private static bool TryGetPDBIndex(Stream stream, string filename, out string index)
+            {
+                index = null;
+                try
+                {
+                    if (Path.GetExtension(filename) != ".pdb")
+                    {
+                        return false;
+                    }
+                    PDBFile pdb = new PDBFile(new StreamAddressSpace(stream));
+                    if (!pdb.Header.IsMagicValid.Check())
+                    {
+                        return false;
+                    }
+    
+                    string key = pdb.Signature.ToString().Replace("-", "").ToLowerInvariant() + pdb.Age.ToString("x").ToLowerInvariant();
+                    index = BuildIndexFromModuleUUID(key, PDB_INDEXSTYLE_ID, filename);
+                    return true;
+                }
+                catch (InputParsingException)
+                {
+                    return false;
+                }
+            }
+
             private async Task DecompAndHashAsync(CancellationToken cancelToken)
             {
                 using (var sha1 = SHA1.Create())
