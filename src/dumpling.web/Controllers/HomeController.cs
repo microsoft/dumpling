@@ -27,11 +27,11 @@ namespace dumpling.web.Controllers
 
                 foreach (var failure in dumpsByFailure)
                 {
-                    failures.Add(failure.Key);
+                    failures.Add(failure.Key ?? "UNTRIAGED");
                        
                     var dumps = failure.ToArray();
 
-                    ViewData[failure.Key] = dumps;
+                    ViewData[failure.Key ?? "UNTRIAGED"] = dumps;
 
                     foreach (var dump in dumps)
                     {

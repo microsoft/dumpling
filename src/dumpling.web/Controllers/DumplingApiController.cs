@@ -2,6 +2,8 @@
 using dumpling.web.Storage;
 using FileFormats;
 using FileFormats.ELF;
+using FileFormats.PDB;
+using FileFormats.PE;
 using Microsoft.WindowsAzure.Storage.Blob;
 using System;
 using System.Collections.Generic;
@@ -70,7 +72,7 @@ namespace dumpling.web.Controllers
 
         [Route("api/dumplings/{dumplingid:int}/dumps/uploads/")]
         [HttpPost]
-        public async Task<IEnumerable<DumpArtifact>> UploadDump(int dumplingid, [FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
+        public async Task<List<string>> UploadDump(int dumplingid, [FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
         {
             using (DumplingDb dumplingDb = new DumplingDb())
             {
@@ -81,18 +83,33 @@ namespace dumpling.web.Controllers
                 {
                     throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The given dumplingId is invalid"));
                 }
-                
+
+                var clientFilesNeeded = new List<string>();
+
                 using (var uploader = new DumpArtifactUploader(dumplingid))
                 {
                     await UploadDumpArtifactAsync(uploader, dumplingDb, dumpling, hash, localpath, cancelToken);
 
                     foreach(var dumpArtifact in uploader.LoadedArtifacts)
                     {
+                        var artifactIndex = await dumplingDb.ArtifactIndexes.FindAsync(dumpArtifact.Index);
+
+                        if(artifactIndex != null)
+                        {
+                            dumpArtifact.Hash = artifactIndex.Hash;
+                        }
+                        else
+                        {
+                            clientFilesNeeded.Add(dumpArtifact.LocalPath);
+                        }
+
                         dumpling.DumpArtifacts.Add(dumpArtifact);
                     }
+
+                    await dumplingDb.SaveChangesAsync();
                 }
 
-                return dumpling.DumpArtifacts;
+                return clientFilesNeeded;
             }
         }
 
@@ -289,17 +306,24 @@ namespace dumpling.web.Controllers
 
                     foreach (var image in coreFile.LoadedImages)
                     {
-                        string buildId = null;
+                        string index = null;
 
                         try
                         {
-                            buildId = string.Concat(image.Image.BuildID.Select(b => b.ToString("x2"))).ToLowerInvariant();
+                            //this call will throw an exception if the loaded image doesn't have a build id.  
+                            //Unfortunately there is no way to check if build id exists without ex
+                            var buildId = image.Image.BuildID;
+
+                            if (buildId != null)
+                            {
+                                index = BuildIndexFromModuleUUID(buildId, ELF_INDEXSTYLE_ID, Path.GetFileName(image.Path));
+                            }
                         }
                         catch { }
 
-                        dumpArtifacts.Add(new DumpArtifact() { DumpId = _dumpId, LocalPath = image.Path, Index = buildId });
+                        dumpArtifacts.Add(new DumpArtifact() { DumpId = _dumpId, LocalPath = image.Path, Index = index });
                     }
-
+                    
                     return true;
                 }
                 catch
@@ -377,6 +401,10 @@ namespace dumpling.web.Controllers
                 {
                     Format = "elf";
                 }
+                else if(TryGetPEIndex(Decompressed, FileName, out index))
+                {
+                    Format = "pe";
+                }
                 else
                 {
                     Format = "unknown";
@@ -387,8 +415,10 @@ namespace dumpling.web.Controllers
                 Index = index;
             }
 
-            protected const string ELF_INDEXSTYLE_ID = "sha1";
-            protected const string SHA1_INDEXSTYLE_ID = "elf-buildid";
+            protected const string SHA1_INDEXSTYLE_ID = "sha1-";
+            protected const string ELF_INDEXSTYLE_ID = "elf-buildid-";
+            protected const string PE_INDEXSTYLE_ID = "";
+            protected const string PDB_INDEXSTYLE_ID = "";
 
             protected static string BuildIndexFromModuleUUID(byte[] uuid, string indexStyleId, string filename)
             {
@@ -406,14 +436,14 @@ namespace dumpling.web.Controllers
                 key.Append("/");
 
                 key.Append(indexStyleId);
-
-                key.Append("-");
-
+                
                 key.Append(uuid);
 
                 key.Append("/");
 
                 key.Append(filename);
+
+                key.Append(".gz");
 
                 return key.ToString();
             }
@@ -447,6 +477,61 @@ namespace dumpling.web.Controllers
 
             }
             
+            private static bool TryGetPEIndex(Stream stream, string filename, out string index)
+            {
+                index = null;
+                string extension = Path.GetExtension(filename);
+                if (extension != ".dll" && extension != ".exe")
+                {
+                    return false;
+                }
+
+                StreamAddressSpace fileAccess = new StreamAddressSpace(stream);
+                try
+                {
+                    PEFile reader = new PEFile(fileAccess);
+                    if (!reader.HasValidDosSignature.Check())
+                    {
+                        return false;
+                    }
+
+                    string key = reader.Timestamp.ToString("x").ToLowerInvariant() + reader.SizeOfImage.ToString("x").ToLowerInvariant();
+
+                    index = BuildIndexFromModuleUUID(key, PE_INDEXSTYLE_ID, filename);
+
+                    return true;
+                }
+                catch (InputParsingException)
+                {
+                    return false;
+                }
+            }
+
+            private static bool TryGetPDBIndex(Stream stream, string filename, out string index)
+            {
+                index = null;
+                try
+                {
+                    if (Path.GetExtension(filename) != ".pdb")
+                    {
+                        return false;
+                    }
+                    PDBFile pdb = new PDBFile(new StreamAddressSpace(stream));
+                    if (!pdb.Header.IsMagicValid.Check())
+                    {
+                        return false;
+                    }
+    
+                    string key = pdb.Signature.ToString().Replace("-", "").ToLowerInvariant() + pdb.Age.ToString("x").ToLowerInvariant();
+                    index = BuildIndexFromModuleUUID(key, PDB_INDEXSTYLE_ID, filename);
+                    return true;
+                }
+                catch (InputParsingException)
+                {
+                    return false;
+                }
+            }
+
             private async Task DecompAndHashAsync(CancellationToken cancelToken)
             {
                 using (var sha1 = SHA1.Create())

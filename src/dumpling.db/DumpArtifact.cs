@@ -16,6 +16,7 @@ namespace dumpling.db
 
         [Key]
         [Column(Order = 1)]
+        [StringLength(450)]
         public string LocalPath { get; set; }
 
         public string Hash { get; set; }
