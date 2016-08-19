@@ -42,7 +42,7 @@ namespace dumpling.web.Controllers
 
                 foreach (var dump in dumps)
                 {
-                    ViewData["dumpid." + dump.DumpId] = dump.GetPropertyBag();
+                    ViewData["dumpid." + dump.DumpId] = JsonConvert.SerializeObject(dump.GetPropertyBag());
                 }
             }
 

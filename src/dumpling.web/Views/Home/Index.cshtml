@@ -153,7 +153,7 @@
                     valueChild.style.whiteSpace = 'pre-wrap';
 
                     row.appendChild(valueChild)
-                        .appendChild(document.createTextNode(data["dumpid." + currentElement.id][index].Value));
+                        .appendChild(document.createTextNode(index));
 
                     // KEY
                     var keyChild = document.createElement("td");
@@ -161,7 +161,7 @@
                     keyChild.style.backgroundColor = "#d1ac87";
                     keyChild.align = "center";
                     row.appendChild(keyChild)
-                        .appendChild(document.createTextNode(data["dumpid." + currentElement.id][index].Name));
+                        .appendChild(document.createTextNode(data["dumpid." + currentElement.id][index]));
 
 
                 }
