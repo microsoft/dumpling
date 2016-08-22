@@ -276,16 +276,26 @@ namespace dumpling.web.Controllers
         {
             var artifact = await UploadArtifactAsync(uploader, dumplingDb, hash, localpath, cancelToken);
 
-            var dumpArtifact = new DumpArtifact()
-            {
-                DumpId = dump.DumpId,
-                Hash = artifact.Hash,
-                Index = artifact.Indexes.FirstOrDefault()?.Index,
-                LocalPath = localpath,
-                DebugCritical = debugCritical
-            };
+            var dumpArtifact = await dumplingDb.DumpArtifacts.FindAsync(dump.DumpId, localpath);
 
-            dump.DumpArtifacts.Add(dumpArtifact);
+            if (dumpArtifact == null)
+            {
+                dumpArtifact = new DumpArtifact()
+                {
+                    DumpId = dump.DumpId,
+                    LocalPath = localpath,
+                    DebugCritical = debugCritical
+                };
+
+                dump.DumpArtifacts.Add(dumpArtifact);
+            }
+
+            dumpArtifact.Hash = artifact.Hash;
+
+            if (dumpArtifact.Index == null)
+            {
+                dumpArtifact.Index = artifact.Indexes.FirstOrDefault()?.Index;
+            }
 
             await dumplingDb.SaveChangesAsync();
 

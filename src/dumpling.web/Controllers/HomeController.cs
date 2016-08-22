@@ -12,20 +12,38 @@ namespace dumpling.web.Controllers
 {
     public class HomeController : Controller
     {
+        [Route("{days:int?}")]
         public async Task<ActionResult> Index(int? days)
         {
+            return await this.FilterIndex(null, null);
+        }
+
+        [Route("{days:int?}/filter{*queryParams}")]
+        public async Task<ActionResult> FilterIndex(int? days, string queryParams)
+        {
+            var queryDict = new Dictionary<string, string>();
+
+            foreach(var key in this.Request.QueryString.AllKeys)
+            {
+                queryDict[key] = this.Request.QueryString.Get(key);
+            }
+
             days = days.HasValue ? days : 10;
+
+            var minTime = DateTime.UtcNow.AddDays(days.Value * -1);
+            var maxTime = DateTime.UtcNow.AddDays(1);
 
             List<Dump> loadedDumps = null;
 
-            using (var context = new DumplingDb())
-            {
-                var minTime = DateTime.UtcNow.AddDays(days.Value * -1);
+            using (var dumplingDb = new DumplingDb())
+            {                
+                loadedDumps = dumplingDb.FindDumps(minTime, maxTime, queryDict).ToList();
 
-                var dumpsInTimeframe = days == 0 ? context.Dumps : context.Dumps.Where(d => d.DumpTime > minTime);
-
-                loadedDumps = dumpsInTimeframe.Include(d => d.Failure).Include(d => d.Properties).ToList();
-
+                foreach(var dump in loadedDumps)
+                {
+                    dumplingDb.Entry(dump).Reference(d => d.Failure);
+                    dumplingDb.Entry(dump).Collection(d => d.Properties).Load();
+                }
             }
 
             var dumpsByFailure = loadedDumps.GroupBy(d => d.FailureHash);

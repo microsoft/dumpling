@@ -92,11 +92,13 @@ class DumplingService:
         
         qargs = { 'hash': hash, 'localpath': localpath }
         
-        #only include the dumpid if the content is not None
-        if dumpid is not None:
-            qargs['dumpid'] = dumpid
+        url = self._dumplingUri  + 'api/'
 
-        url = self._dumplingUri + 'api/artifacts/uploads?' + urllib.urlencode(qargs)
+        #only include the dumpid if the not None
+        if dumpid is not None:
+            url = url + 'dumplings/' + dumpid + '/'
+
+        url = url + 'artifacts/uploads?' + urllib.urlencode(qargs)
 
         Output.Message('uploading artifact %s %s'%(hash, os.path.basename(localpath)))
 
@@ -277,6 +279,9 @@ class CommandProcesser:
 
             dumpid = self._filequeue.UploadDump(self._args.dumppath, self._args.incpaths, self._args.user, self._args.displayname)
             
+            if not self._args.suppresstriage:
+                self._args.properties = CommandProcesser._add_client_triage_properties(self._args.properties)
+
             if self._args.properties is not None:
                 self._dumpSvc.UpdateDumpProperties(dumpid, self._args.properties)      
             
@@ -304,6 +309,33 @@ class CommandProcesser:
         elif self._args.symindex is not None:
             Output.Critical('downloading artifacts from index is not yet supported')
             #self._filequeue.QueueFileIndexDownload(self._args.symindex, abspath)
+    
+    @staticmethod
+    def _add_client_triage_properties(dictProp):
+        dictProp = dictProp or { }
+        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_ARCHITECTURE', platform.machine())
+        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_PROCESSOR', platform.processor())
+        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_NAME', platform.node())
+        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_OS', platform.system())           
+        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_RELEASE', platform.release())     
+        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_VERSION', platform.version())
+        if platform.system() == 'Linux':
+            distroTuple = platform.linux_distribution()
+            CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_DISTRO', distroTuple[0])
+            CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_DISTRO_VER', distroTuple[1])
+            CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_DISTRO_ID', distroTuple[2])
+        return dictProp
+
+    @staticmethod
+    def _add_key_if_not_exists(dictProp, key, val):
+        if not key in dictProp:
+            dictProp[key] = val
+
+def _parse_key_value_pair(argStr):
+    kvp = string.split(argStr, '=', 1)
+
+    if len(kvp) != 2:
+        raise argparse.ArgumentError('the specified property key value pair is invalid. ' + argstr)
 
 if __name__ == '__main__':
 
@@ -326,26 +358,39 @@ if __name__ == '__main__':
     upload_parser.add_argument('--displayname', type=str, default=None, help='the name to be displayed in reports for the uploaded dump.  This argument is ignored unless --dumppath is specified')
 
     upload_parser.add_argument('--user', type=str, default=getpass.getuser().lower(), help='The username to pass to the dumpling service.  This argument is ignored unless --dumppath is specified')
+    
+    upload_parser.add_argument('--suppresstriage', default=False, action='store_true', help='supresses client side triage information from being uploadeded with the dump')
 
     upload_parser.add_argument('--incpaths', nargs='*', type=str, help='paths to files or directories to be included in the upload')
 
-    upload_parser.add_argument('--properties', type=json.loads, help='json string dictionary of properties to be associated with the upload dump.  This argument is ignored unless --dumppath is specified', metavar='\'{ "key": "val" (, "key": "val" ...)}\'' )  #'"{ \'key1\': \'val1\' [, \'keyn\': \'valn\']...}"' )  
+    upload_parser.add_argument('--properties', nargs='*', type=_parse_key_value_pair, help='a list of properties to be associated with the dump in the format key=value', metavar='key=value')  
+                                         
+    upload_parser.add_argument('--propfile', type=argparse.FileType('r'), help='path to a file containing a json serialized dictionary of property value paires')
 
     download_parser = subparsers.add_parser('download', parents=[outputparser], help='command used for downloading dumps and files from the dumpling service')    
-                                                                                                     
-    download_parser.add_argument('--dumpid', type=int, help='the dumpling id of the dump to download for debugging')   
     
-    download_parser.add_argument('--hash', type=str, help='the id of the artifact to download')  
+    download_idtype = download_parser.add_mutually_exclusive_group(required=True)                                                                                             
+    
+    download_idtype.add_argument('--dumpid', type=int, help='the dumpling id of the dump to download for debugging')   
+    
+    download_idtype.add_argument('--hash', type=str, help='the id of the artifact to download')  
    
-    download_parser.add_argument('--symindex', type=str, help='the symstore index of the artifact to download')
+    download_idtype.add_argument('--symindex', type=str, help='the symstore index of the artifact to download')
                                                                                    
     download_parser.add_argument('--downpath', type=str, help='the path to download the specified content to. NOTE: if both downpath and downdir are specified downdir will be ignored')
 
-    download_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')     
-
+    download_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')    
+    
+    update_parser = subparsers.add_parser('update', parents=[outputparser], help='command used for updating dump properties and associated files')
                                                                                                             
-    #update_parser.add_argument('--dumpid', type=int, help='the dumpling id the specified files are to be associated with')
-        
+    update_parser.add_argument('--dumpid', type=int, help='the dumpling id the specified updates are to be associated with')
+    
+    update_parser.add_argument('--properties', nargs='*', type=_parse_key_value_pair, help='a list of properties and values to be associated with the dump in the format property=value', metavar='property=value')  
+    
+    update_parser.add_argument('--propfile', type=argparse.FileType('r'), help='path to a file containing a json serialized dictionary of property value paires')
+
+    update_parser.add_argument('--incpaths', nargs='*', type=str, help='paths to files or directories to be associated with the specified dump')
+    
 
 
     args = parser.parse_args()

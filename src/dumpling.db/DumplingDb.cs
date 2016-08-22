@@ -32,6 +32,59 @@ namespace dumpling.db
             await UpdateIncompleteDumpArtifacts(artifact);
         }
 
+        public IEnumerable<Dump> FindDumps(DateTime startTime, DateTime endTime, Dictionary<string, string> propertyDictionary)
+        {
+            StringBuilder query = new StringBuilder("SELECT [D].* FROM [DUMPS] AS [D] ");
+
+            string failureHash = null;
+
+            int pi = 0;
+
+            List<object> queryParameters = new List<object>();
+
+            if (propertyDictionary != null && propertyDictionary.Count != 0)
+            {
+                if(propertyDictionary.ContainsKey(Failure.FAILURE_HASH_PROP_KEY))
+                {
+                    failureHash = propertyDictionary[Failure.FAILURE_HASH_PROP_KEY];
+
+                    propertyDictionary.Remove(Failure.FAILURE_HASH_PROP_KEY);
+                }
+
+                var properties = new List<KeyValuePair<string, string>>(propertyDictionary);
+
+                for (int i = 0; i < properties.Count; i++)
+                {
+                    var prop = properties[i];
+
+                    query.Append($"JOIN [Properties] [P{i}] ON [D].[DumpId] == [P{i}].[DumpId] AND [P{i}].[Name] == @p{pi++} AND [P{i}].[Value] == @p{pi++} ");
+
+                    queryParameters.Add(prop.Key);
+
+                    queryParameters.Add(prop.Value);
+                }
+            }
+
+            query.Append("WHERE ");
+
+            if (failureHash != null)
+            {
+                query.Append($"[D].[FailureHash] == @p{pi++} AND ");
+
+                queryParameters.Add(failureHash);
+            }
+
+            query.Append($"[D].[DumpTime] >= @p{pi++} AND [D].[DumpTime] <= @p{pi++}");
+
+            queryParameters.Add(startTime);
+
+            queryParameters.Add(endTime);
+
+            var dumps = this.Dumps.SqlQuery(query.ToString(), queryParameters.ToArray()).AsQueryable<Dump>().Include(d => d.Properties).Include(d => d.Failure);
+
+            return dumps.ToArray();
+        }
+
         private async Task UpdateIncompleteDumpArtifacts(Artifact artifact)
         {
             foreach (var index in artifact.Indexes)
