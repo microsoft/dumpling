@@ -17,6 +17,8 @@ namespace dumpling.db
 {
     public class Failure
     {
+        public const string FAILURE_HASH_PROP_KEY = "FAILURE_HASH";
+
         public Failure()
         {
         }

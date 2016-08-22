@@ -5,6 +5,8 @@ using FileFormats.ELF;
 using FileFormats.PDB;
 using FileFormats.PE;
 using Microsoft.WindowsAzure.Storage.Blob;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity.Infrastructure;
@@ -30,10 +32,11 @@ namespace dumpling.web.Controllers
 
         public bool AllowDumplicateDumps = true;
 
-        [Route("api/client/scripts")]
+        [Route("api/client/{*filename}")]
         [HttpGet]
-        public HttpResponseMessage GetClientTools([FromUri] string filename)
+        public HttpResponseMessage GetClientTools(string filename)
         {
+
             string path = HttpContext.Current.Server.MapPath("~/Content/client/" + filename);
 
             HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK);
@@ -45,9 +48,9 @@ namespace dumpling.web.Controllers
 
         }
 
-        [Route("api/dumplings/{dumplingId:int}/artifacts")]
+        [Route("api/dumplings/{dumplingId}/artifacts")]
         [HttpGet]
-        public async Task<IEnumerable<DumpArtifact>> GetDumplingArtifacts(int dumplingId)
+        public async Task<IEnumerable<DumpArtifact>> GetDumplingArtifacts(string dumplingId)
         {
             using (DumplingDb dumplingDb = new DumplingDb())
             {
@@ -61,6 +64,48 @@ namespace dumpling.web.Controllers
         {
             public string dumplingId { get; set; }
             public string[] refPaths { get; set; }
+        }
+
+        [Route("api/dumplings/{dumplingid}/properties")]
+        [HttpPost]
+        public async Task<HttpResponseMessage> UpdateDumpProperties(string dumplingid, [FromBody]JToken properties, CancellationToken cancelToken)
+        {
+            using (DumplingDb dumplingDb = new DumplingDb())
+            {
+                var dumpling = await dumplingDb.Dumps.FindAsync(cancelToken, dumplingid);
+
+                //if the specified dump was not found throw an exception 
+                if (dumpling == null)
+                {
+                    throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The given dumplingId is invalid"));
+                }
+
+                var propDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(properties.ToString());
+
+                //update any properties which were pre-existing with the new value
+                foreach(var existingProp in dumpling.Properties)
+                {
+                    string val = null;
+
+                    if (propDict.TryGetValue(existingProp.Name, out val))
+                    {
+                        existingProp.Value = val;
+
+                        propDict.Remove(existingProp.Name);
+                    }
+                }
+
+                //add any properties which were not previously existsing 
+                //(the existing keys have been removed in previous loop)
+                foreach(var newProp in propDict)
+                {
+                    dumpling.Properties.Add(new Property() { Name = newProp.Key, Value = newProp.Value });
+                }
+
+                await dumplingDb.SaveChangesAsync();
+
+                return Request.CreateResponse(HttpStatusCode.OK);
+            }
         }
 
         [Route("api/dumplings/uploads/")]
@@ -128,6 +173,7 @@ namespace dumpling.web.Controllers
         }
 
         [Route("api/dumplings/{dumplingid}/artifacts/uploads/")]
+        [HttpPost]
         public async Task UploadArtifact(string dumplingid, [FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
         {
             using (DumplingDb dumplingDb = new DumplingDb())
@@ -169,58 +215,87 @@ namespace dumpling.web.Controllers
             }
         }
 
-        [Route("api/artifacts/downloads/{hash}")]
+        [Route("api/artifacts/{hash}")]
         [HttpGet]
-        public async Task<IHttpActionResult> DownloadArtifact(string hash)
+        public async Task<HttpResponseMessage> DownloadArtifact(string hash, CancellationToken cancelToken)
         {
             using (var dumplingDb = new DumplingDb())
             {
                 var artifact = await dumplingDb.Artifacts.FindAsync(hash);
 
-                if (artifact == null)
-                {
-                    return (IHttpActionResult)Request.CreateResponse(HttpStatusCode.NotFound);
-                }
-
-                var stream = new MemoryStream();
-
-                var blob = DumplingStorageClient.BlobClient.GetBlobReferenceFromServer(new Uri(artifact.Url));
-
-                var sasConstraints = new SharedAccessBlobPolicy();
-                sasConstraints.SharedAccessStartTime = DateTime.UtcNow;
-                sasConstraints.SharedAccessExpiryTime = DateTime.UtcNow.AddHours(1);
-                sasConstraints.Permissions = SharedAccessBlobPermissions.Read;
-                
-                var blobToken = blob.GetSharedAccessSignature(sasConstraints);
-                var tempAccessUrl = artifact.Url + blobToken;
-                return (IHttpActionResult)this.Redirect(tempAccessUrl);
-
-
-
-                //await blob.DownloadToStreamAsync(stream);
-
-                //HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK);
-                //result.Content = new StreamContent(stream);
-                //result.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-                //result.Content.Headers.Add("FileName", artifact.FileName);
-                //return result;
+                return await GetArtifactRedirectAsync(artifact, cancelToken);
             }
+        }
+
+        [Route("api/artifacts/index/{*index}")]
+        [HttpGet]
+        public async Task<HttpResponseMessage> DownloadIndexedArtifact(string index, CancellationToken cancelToken)
+        {
+            Artifact artifact = null;
+
+            using (var dumplingDb = new DumplingDb())
+            {
+                var artifactIndex = await dumplingDb.ArtifactIndexes.FindAsync(index);
+
+                artifact = artifactIndex?.Artifact;
+            }
+
+            return await GetArtifactRedirectAsync(artifact, cancelToken);
+        }
+
+        private async Task<HttpResponseMessage> GetArtifactRedirectAsync(Artifact artifact, CancellationToken cancelToken)
+        {
+            if (artifact == null)
+            {
+                return Request.CreateResponse(HttpStatusCode.NotFound);
+            }
+
+            var stream = new MemoryStream();
+
+            var blob = DumplingStorageClient.BlobClient.GetBlobReferenceFromServer(new Uri(artifact.Url));
+
+            var sasConstraints = new SharedAccessBlobPolicy()
+            {
+                SharedAccessStartTime = DateTime.UtcNow.AddMinutes(-1),
+                SharedAccessExpiryTime = DateTime.UtcNow.AddHours(1),
+                Permissions = SharedAccessBlobPermissions.Read
+            };
+
+            var blobToken = blob.GetSharedAccessSignature(sasConstraints);
+
+            var tempAccessUrl = artifact.Url + blobToken;
+
+            var httpResponse = await ((IHttpActionResult)this.Redirect(tempAccessUrl)).ExecuteAsync(cancelToken);
+
+            httpResponse.Headers.Add("dumpling-filename", artifact.FileName);
+
+            return httpResponse;
         }
 
         private async Task<Artifact> UploadDumpArtifactAsync(ArtifactUploader uploader, DumplingDb dumplingDb, Dump dump, string hash, string localpath, bool debugCritical, CancellationToken cancelToken)
         {
             var artifact = await UploadArtifactAsync(uploader, dumplingDb, hash, localpath, cancelToken);
 
-            var dumpArtifact = new DumpArtifact()
-            {
-                DumpId = dump.DumpId,
-                Hash = artifact.Hash,
-                Index = artifact.Indexes.FirstOrDefault()?.Index,
-                LocalPath = localpath,
-                DebugCritical = debugCritical
-            };
+            var dumpArtifact = await dumplingDb.DumpArtifacts.FindAsync(dump.DumpId, localpath);
 
-            dump.DumpArtifacts.Add(dumpArtifact);
+            if (dumpArtifact == null)
+            {
+                dumpArtifact = new DumpArtifact()
+                {
+                    DumpId = dump.DumpId,
+                    LocalPath = localpath,
+                    DebugCritical = debugCritical
+                };
+
+                dump.DumpArtifacts.Add(dumpArtifact);
+            }
+
+            dumpArtifact.Hash = artifact.Hash;
+
+            if (dumpArtifact.Index == null)
+            {
+                dumpArtifact.Index = artifact.Indexes.FirstOrDefault()?.Index;
+            }
 
             await dumplingDb.SaveChangesAsync();
 
