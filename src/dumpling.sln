@@ -3,11 +3,11 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 14
 VisualStudioVersion = 14.0.25420.1
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dumpling.web", "dumpling.web\dumpling.web.csproj", "{B7DCA7BD-EF4D-443D-9766-4DADDE2F105C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dumpling.web", "web\dumpling.web.csproj", "{B7DCA7BD-EF4D-443D-9766-4DADDE2F105C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dumpling.db", "dumpling.db\dumpling.db.csproj", "{C137387C-F799-4CD5-8929-A9341185772D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dumpling.db", "db\dumpling.db.csproj", "{C137387C-F799-4CD5-8929-A9341185772D}"
 EndProject
-Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "dumpling.client", "dumpling.client\dumpling.client.pyproj", "{0133D1DA-7E6E-4450-8D0C-7D6D62103BC8}"
+Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "dumpling.client", "client\dumpling.client.pyproj", "{0133D1DA-7E6E-4450-8D0C-7D6D62103BC8}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
