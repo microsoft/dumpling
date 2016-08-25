@@ -1,10 +1,18 @@
 ﻿body {
-    padding-top: 50px;
-    padding-bottom: 20px;
+    padding-top: 80px;
+    padding-bottom: 60px;
 }
 
+footer {
+    align-content:space-between;
+}
+
+footer-rigth{
+    float: right;
+}
 /* Set padding to keep content from hitting the edges */
 .body-content {
+    width: auto;
     /*padding-left: 15px;
     padding-right: 15px;*/
 }

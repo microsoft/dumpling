@@ -8,18 +8,16 @@
     @Styles.Render("~/Content/css")
     @Scripts.Render("~/bundles/modernizr")
 </head>
-<body>
-    <div class="navbar navbar-inverse navbar-fixed-top">
+<body style="align-self:stretch">
+    <div class="navbar navbar-inverse navbar-fixed-top" style="float:left">
         <div class="container">
-            <div class="navbar-header">
-                <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
-                    <span class="icon-bar"></span>
-                    <span class="icon-bar"></span>
-                    <span class="icon-bar"></span>
-                </button>
-                <b>@Html.ActionLink("dumpling", "Index", "Home", new { area = "area" }, new { @class = "navbar-brand" })</b>
+            <div class="navbar-header" style="float:left">
+                
+                <img src="~/Content/images/dumpling.png" />
+                <b class="navbar-brand" style="margin-right:200px">dumpling</b>
+                
             </div>
-            <div class="navbar-collapse collapse">
+            <div class="navbar-collapse collapse" style="float:right">
                 <ul class="nav navbar-nav">
                     <li><a href="http://www.github.com/microsoft/dumpling">the repository</a></li>
                     <li><a href="~/api/client/dumpling.py">the client</a></li>
@@ -27,11 +25,19 @@
             </div>
         </div>
     </div>
-    <div>
-        @RenderBody()
+    <div style="margin-top:25px">
+        <p >
+            @RenderBody()
+        </p>
         <hr />
         <footer>
-            <p>&copy; @DateTime.Now.Year - Microsoft Corporation</p>
+            <div style="margin-left:20px">
+                <a href="https://msdn.microsoft.com/en-us/dn529288" style="margin-right:100px">Privacy</a>
+                <a href="https://msdn.microsoft.com/en-us/cc300389">Terms of use</a>
+            </div>
+            <div>
+                <p class="modal-footer">&copy; @DateTime.Now.Year - Microsoft Corporation</p>
+            </div>
         </footer>
     </div>
 

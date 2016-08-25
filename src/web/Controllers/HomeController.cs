@@ -50,11 +50,11 @@ namespace dumpling.web.Controllers
 
             var failures = new List<string>();
 
-            foreach (var failure in dumpsByFailure)
+            foreach (var failure in dumpsByFailure.OrderByDescending(g => g.Count()))
             {
                 failures.Add(failure.Key ?? "UNTRIAGED");
 
-                var dumps = failure.ToArray();
+                var dumps = failure.OrderByDescending(d => d.DumpTime).ToArray();
 
                 ViewData[failure.Key ?? "UNTRIAGED"] = dumps;
 
