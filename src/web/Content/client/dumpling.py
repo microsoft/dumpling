@@ -20,11 +20,14 @@ import tempfile
 import hashlib  
 import zlib
 import gzip
+import threading
+import multiprocessing
 
 class Output:
     s_squelch=False
     s_verbose=False
-    s_logPath='';
+    s_logPath=''
+    s_lock=threading.Lock()
 
     @staticmethod
     def Diagnostic(output):
@@ -42,14 +45,20 @@ class Output:
 
     @staticmethod
     def Print(output):
-        # always print out essential information.
-        print output
+        Output.s_lock.acquire()
+
+        try:
+            # always print out essential information.
+            print output
         
-        # sometimes amend our essential output to an existing log file.
-        if(Output.s_logPath is not None and os.path.isfile(Output.s_logPath)):
-            # Note: The file must exist.
-            with open(Output.s_logPath, 'a') as log_file:
-                log_file.write(output)
+            # sometimes amend our essential output to an existing log file.
+            if(Output.s_logPath is not None and os.path.isfile(Output.s_logPath)):
+                # Note: The file must exist.
+                with open(Output.s_logPath, 'a') as log_file:
+                    log_file.write(output)
+        finally:
+            Output.s_lock.release()
+        
 class FileTransforms:
 
 
@@ -101,7 +110,7 @@ class DumplingService:
     def GetDumplingManfiest(self, dumpid):
         url = self._dumplingUri  + 'api/dumplings/' + dumpid + '/manifest'
 
-        Output.Message('retrieving dumpling manifext, dumplingid: %s'%(dumpid))    
+        Output.Message('retrieving dumpling %s manifest'%(dumpid))    
 
         Output.Diagnostic('   url: %s'%(url))
 
@@ -138,7 +147,12 @@ class DumplingService:
         response.raise_for_status()
 
     
-    def DownloadArtifact(self, hash, downpath):              
+    def DownloadArtifact(self, hash, downpath):  
+        if os.path.isdir(downpath):
+            self._dumpSvc.DowloadArtifactToDirectory(hash, downpath)
+
+            return
+
         url = self._dumplingUri + 'api/artifacts/' + hash
 
         Output.Diagnostic('   url: %s'%(url))
@@ -215,31 +229,63 @@ class DumplingService:
             Output.Critical("ERROR: downloaded file did not match expected hash value")
             os.remove(path)
         else: 
-            Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))   
-   
-
+            Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))                
         
 class FileTransferManager:
+    s_MaxThreads = multiprocessing.cpu_count()
+
     def __init__(self, dumpSvc):
         self._hashmap = { }
         self._dumpSvc = dumpSvc
+        
+        if FileTransferManager.s_MaxThreads > 1:
+            self._threadGate = threading.Semaphore(FileTransferManager.s_MaxThreads)
 
     def QueueFileDownload(self, hash, abspath):
-        if os.path.isdir(abspath):
-            self._dumpSvc.DowloadArtifactToDirectory(hash, abspath)
-        else:
+        if FileTransferManager.s_MaxThreads <= 1:
             self._dumpSvc.DownloadArtifact(hash, abspath)
-
+        else:                                                                                     
+            self._threadGate.acquire(blocking=True)
+            downloadThread = threading.Thread(target=self._background_download_file, args=(hash, abspath))
+            downloadThread.start()
+        
+    def _background_download_file(self, hash, abspath):
+        try:
+            self._dumpSvc.DownloadArtifact(hash, abspath)
+        finally:
+            self._threadGate.release()
+    
     def QueueFileUpload(self, dumpid, abspath):
+        if FileTransferManager.s_MaxThreads <= 1:
+            self._compress_and_upload(dumpid, abspath)
+        else:                                                                                     
+            self._threadGate.acquire(blocking=True)
+            downloadThread = threading.Thread(target=self._background_upload_file, args=(dumpid, abspath))
+            downloadThread.start()
+                               
+    def _background_upload_file(self, dumpid, abspath):
+        try:
+            self._compress_and_upload(dumpid, abspath)
+        finally:
+            self._threadGate.release()
+
+    def _compress_and_upload(self, dumpid, abspath):              
         hash = None
         Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(abspath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
-        fhash = FileTransforms._hash_and_compress(abspath, tempPath)
-        Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
-        with open(tempPath, 'rb') as fUpld:
-            self._dumpSvc.UploadArtifact(dumpid, abspath, fhash, fUpld)    
-        os.remove(tempPath)
-    
+        try:
+            fhash = FileTransforms._hash_and_compress(abspath, tempPath)
+            Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
+            with open(tempPath, 'rb') as fUpld:
+                self._dumpSvc.UploadArtifact(dumpid, abspath, fhash, fUpld)    
+        
+        finally:
+            try:
+                os.remove(tempPath)
+            except:
+                Output.Message('WARNING: failed to remove temp file %s'%(tempPath))
+                
+
     def UploadDump(self, dumppath, incpaths, origin, displayname):
         #
         hash = None
