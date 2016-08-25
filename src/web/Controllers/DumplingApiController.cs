@@ -256,33 +256,42 @@ namespace dumpling.web.Controllers
                 var archiveTasks = new List<Task>();
                 dumplingDb.Entry(dump).Collection(d => d.Properties).Load();
                 var fileName = dump.DisplayName + ".zip";
-                var tempFile = CreateTempFile(fileName);
+                var tempFile = CreateTempFile();
 
-                using (var zipArchive = new ZipArchive(tempFile, ZipArchiveMode.Create, true))
-                using (var archiveLock = new SemaphoreSlim(1, 1))
+                try
                 {
-                    //find all the artifacts associated with the dump
-                    foreach (var dumpArtifact in dump.DumpArtifacts.Where(da => da.Hash != null))
+                    using (var zipArchive = new ZipArchive(tempFile, ZipArchiveMode.Create, true))
+                    using (var archiveLock = new SemaphoreSlim(1, 1))
                     {
-                        await dumplingDb.Entry(dumpArtifact).Reference(d => d.Artifact).LoadAsync(cancelToken);
-                        
-                        archiveTasks.Add(DownloadArtifactToArchiveAsync(dumpArtifact, zipArchive, archiveLock, cancelToken));
+                        //find all the artifacts associated with the dump
+                        foreach (var dumpArtifact in dump.DumpArtifacts.Where(da => da.Hash != null))
+                        {
+                            await dumplingDb.Entry(dumpArtifact).Reference(d => d.Artifact).LoadAsync(cancelToken);
+
+                            archiveTasks.Add(DownloadArtifactToArchiveAsync(dumpArtifact, zipArchive, archiveLock, cancelToken));
+                        }
+
+                        await Task.WhenAll(archiveTasks.ToArray());
+
+                        await tempFile.FlushAsync();
                     }
 
-                    await Task.WhenAll(archiveTasks.ToArray());
-
                     await tempFile.FlushAsync();
+
+                    tempFile.Position = 0;
+                    HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK);
+                    result.Content = new StreamContent(tempFile);
+                    result.Content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+                    result.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment");
+                    result.Content.Headers.ContentDisposition.FileName = fileName;
+                    return result;
                 }
+                catch
+                {
+                    tempFile.Dispose();
 
-                await tempFile.FlushAsync();
-
-                tempFile.Position = 0;
-                HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK);
-                result.Content = new StreamContent(tempFile);
-                result.Content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
-                result.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment");
-                result.Content.Headers.ContentDisposition.FileName = fileName;
-                return result;
+                    throw;
+                }
             }
 
         }
@@ -296,7 +305,18 @@ namespace dumpling.web.Controllers
                 //download the compressed dump artifact to a temp file
                 using (var tempStream = CreateTempFile())
                 {
-                    await blob.DownloadToStreamAsync(tempStream, cancelToken);
+
+                    using (var compStream = CreateTempFile())
+                    {
+                        await blob.DownloadToStreamAsync(compStream, cancelToken);
+
+                        using (var gunzipStream = new GZipStream(compStream, CompressionMode.Decompress, false))
+                        {
+                            await gunzipStream.CopyToAsync(tempStream);
+                        }
+
+                        await tempStream.FlushAsync();
+                    }
 
                     tempStream.Position = 0;
 
@@ -308,14 +328,11 @@ namespace dumpling.web.Controllers
                         {
                             var entry = archive.CreateEntry(FixupLocalPath(dumpArtifact.LocalPath));
 
-                            using (var gunzipStream = new GZipStream(tempStream, CompressionMode.Decompress, false))
+                            using (var entryStream = entry.Open())
                             {
-                                using (var entryStream = entry.Open())
-                                {
-                                    await gunzipStream.CopyToAsync(entryStream);
+                                await tempStream.CopyToAsync(entryStream);
 
-                                    await entryStream.FlushAsync();
-                                }
+                                await entryStream.FlushAsync();
                             }
                         }
                         finally
@@ -451,7 +468,7 @@ namespace dumpling.web.Controllers
         {
             path = path ?? Path.GetTempFileName();
 
-            string root = HttpContext.Current.Server.MapPath("~/App_Data");
+            string root = HttpContext.Current.Server.MapPath("~/App_Data/temp");
 
             string tempPath = Path.Combine(root, path);
 
