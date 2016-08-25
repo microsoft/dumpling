@@ -86,7 +86,7 @@
     <Reference Include="System.Data" />
     <Reference Include="System.Data.DataSetExtensions" />
     <Reference Include="System.Drawing" />
-    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression"/>
     <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Net.Http, Version=4.1.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
@@ -282,7 +282,7 @@
     <Content Include="Scripts\jquery-1.10.2.min.map" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\dumpling.db\dumpling.db.csproj">
+    <ProjectReference Include="..\db\dumpling.db.csproj">
       <Project>{c137387c-f799-4cd5-8929-a9341185772d}</Project>
       <Name>dumpling.db</Name>
     </ProjectReference>
