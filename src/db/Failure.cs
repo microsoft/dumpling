@@ -10,11 +10,13 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
+using System.Runtime.Serialization;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace dumpling.db
 {
+    [DataContract]
     public class Failure
     {
         public const string FAILURE_HASH_PROP_KEY = "FAILURE_HASH";
@@ -24,8 +26,10 @@ namespace dumpling.db
         }
 
         [Key]
+        [DataMember]
         public string FailureHash { get; set; }
 
+        [DataMember]
         public string BugUrl { get; set; }
     }
 }
