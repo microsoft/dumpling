@@ -22,6 +22,7 @@ import zlib
 import gzip
 import threading
 import multiprocessing
+import datetime
 
 class Output:
     s_squelch=False
@@ -99,7 +100,10 @@ class FileTransforms:
         dir = os.path.dirname(path)    
         #create the directory if it doesn't exist
         if not os.path.isdir(os.path.abspath(dir)):
-            os.makedirs(os.path.abspath(dir))
+            try:
+                os.makedirs(os.path.abspath(dir))
+            except:
+                return
 
 class DumplingService:
     s_inst=None
@@ -230,44 +234,88 @@ class DumplingService:
             os.remove(path)
         else: 
             Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))                
-        
-class FileTransferManager:
+
+class ThreadPool:
     s_MaxThreads = multiprocessing.cpu_count()
 
-    def __init__(self, dumpSvc):
+    def __init__(self, maxthreads = None):
+        self._condvar = threading.Condition(threading.RLock())
+        self._threadcount = 0
+        self._availcount = 0
+        self._queue = [ ]
+        self._emptyevent = threading.Event()
+        self._maxthreads = maxthreads or ThreadPool.s_MaxThreads
+        self._draining = False
+    
+    def queue_work(self, func, args=()):
+        self._condvar.acquire()
+
+        if not self._draining:
+            self._queue.append( (func, args) )
+
+            if self._availcount == 0 and self._threadcount < self._maxthreads:
+                self._threadcount += 1
+                self._add_thread()
+
+            self._condvar.notify()
+        else:
+            raise RuntimeError('the thread pool is currently draining and not available to queue work items')
+
+        self._condvar.release()
+            
+    def drain(self):
+        self._condvar.acquire()
+        self._draining = True
+        self._condvar.release()
+        self._emptyevent.wait()
+
+    def _add_thread(self):
+        thread = threading.Thread(target=self._process_queue_items, args=())
+        thread.start()
+
+    def _process_queue_items(self):
+        while True:
+            self._condvar.acquire()
+            if len(self._queue) == 0: 
+                if self._draining:
+                    self._condvar.notify_all()
+                    self._threadcount -= 1
+                    if self._threadcount == 0:
+                        self._emptyevent.set() 
+                    self._condvar.release()             
+                    return
+                self._availcount = self._availcount + 1
+                self._condvar.wait()
+                self._availcount = self._availcount - 1
+            work = self._queue.pop(0)
+            func = work[0]
+            args = work[1]
+            self._condvar.release()
+            func(*args[0:])
+        
+class FileTransferManager:
+
+    def __init__(self, dumpSvc, maxthreads = None):
         self._hashmap = { }
         self._dumpSvc = dumpSvc
-        
-        if FileTransferManager.s_MaxThreads > 1:
-            self._threadGate = threading.Semaphore(FileTransferManager.s_MaxThreads)
-
+        self._threadpool = ThreadPool(maxthreads)
+        self._threadpool._maxthreads
+         
     def QueueFileDownload(self, hash, abspath):
-        if FileTransferManager.s_MaxThreads <= 1:
+        if self._threadpool._maxthreads <= 1:
             self._dumpSvc.DownloadArtifact(hash, abspath)
-        else:                                                                                     
-            self._threadGate.acquire(blocking=True)
-            downloadThread = threading.Thread(target=self._background_download_file, args=(hash, abspath))
-            downloadThread.start()
+        else:                                       
+            self._threadpool.queue_work(self._dumpSvc.DownloadArtifact, args=(hash, abspath))
         
-    def _background_download_file(self, hash, abspath):
-        try:
-            self._dumpSvc.DownloadArtifact(hash, abspath)
-        finally:
-            self._threadGate.release()
-    
     def QueueFileUpload(self, dumpid, abspath):
-        if FileTransferManager.s_MaxThreads <= 1:
+        if self._threadpool._maxthreads <= 1:
             self._compress_and_upload(dumpid, abspath)
         else:                                                                                     
-            self._threadGate.acquire(blocking=True)
-            downloadThread = threading.Thread(target=self._background_upload_file, args=(dumpid, abspath))
-            downloadThread.start()
-                               
-    def _background_upload_file(self, dumpid, abspath):
-        try:
-            self._compress_and_upload(dumpid, abspath)
-        finally:
-            self._threadGate.release()
+            self._threadpool.queue_work(self._compress_and_upload, args=(dumpid, abspath))
+
+    def WaitForPendingTransfers(self):
+        if self._threadpool._maxthreads > 1:
+            self._threadpool.drain()
 
     def _compress_and_upload(self, dumpid, abspath):              
         hash = None
@@ -303,7 +351,7 @@ class FileTransferManager:
         #
         for abspath in self._add_upload_paths(incpaths):
             self.QueueFileUpload(dumpid, abspath)          
-
+    
     def _add_upload_path(self, abspath):
         if not self._hashmap.has_key(abspath):
             self._hashmap[abspath] = None
@@ -364,6 +412,8 @@ class CommandProcesser:
         if not (self._args.incpaths is None or len(self._args.incpaths) == 0):
             self._filequeue.UploadFiles(dumpid, args.incpaths)
 
+        self._filequeue.WaitForPendingTransfers();
+
         
     def Download(self):
         
@@ -396,6 +446,8 @@ class CommandProcesser:
                 if 'hash' in da and 'relativePath' in da:
                     self._filequeue.QueueFileDownload(da['hash'], os.path.join(dumplingDir, da['relativePath'])) 
 
+        self._filequeue.WaitForPendingTransfers();
+
     @staticmethod
     def _add_client_triage_properties(dictProp):
         dictProp = dictProp or { }
@@ -424,6 +476,8 @@ def _parse_key_value_pair(argStr):
         raise argparse.ArgumentError('the specified property key value pair is invalid. ' + argstr)
 
 if __name__ == '__main__':
+
+    starttime = datetime.datetime.now();
 
     outputparser = argparse.ArgumentParser(add_help=False)
     
@@ -489,6 +543,8 @@ if __name__ == '__main__':
     filequeue = FileTransferManager(DumplingService.s_inst)
     cmdProcesser = CommandProcesser(args, filequeue, DumplingService.s_inst)
     cmdProcesser.Process()
+
+    Output.Message('total elapsed time %s'%(datetime.datetime.now() - starttime))
 
 
 
