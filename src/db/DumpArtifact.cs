@@ -26,7 +26,8 @@ namespace dumpling.db
         [NotMapped]
         [DataMember]
         public string RelativePath { get { return LocalPath.Replace(":", string.Empty).Replace('\\', '/').TrimStart('.').TrimStart('/'); } }
-            
+
+        [DataMember]
         public string Hash { get; set; }
         
         [StringLength(450)]
@@ -44,7 +45,6 @@ namespace dumpling.db
         public virtual Dump Dump { get; set; }
         
         [ForeignKey("Hash")]
-        [DataMember]
         public virtual Artifact Artifact { get; set; }
 
 

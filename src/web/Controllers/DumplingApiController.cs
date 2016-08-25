@@ -46,15 +46,24 @@ namespace dumpling.web.Controllers
 
         }
 
-        [Route("api/dumplings/{dumplingId}/artifacts")]
+        [Route("api/dumplings/{dumplingId}/manifest")]
         [HttpGet]
-        public async Task<IEnumerable<DumpArtifact>> GetDumplingArtifacts(string dumplingId)
+        public async Task<Dump> GetDumplingManifest(string dumplingId)
         {
             using (DumplingDb dumplingDb = new DumplingDb())
             {
                 var dump = await dumplingDb.Dumps.FindAsync(dumplingId);
 
-                return dump == null ? new DumpArtifact[] { } : dump.DumpArtifacts.ToArray();
+                if(dump != null)
+                {
+                    await dumplingDb.Entry(dump).Reference(d => d.Failure).LoadAsync();
+
+                    await dumplingDb.Entry(dump).Collection(d => d.DumpArtifacts).LoadAsync();
+
+                    await dumplingDb.Entry(dump).Collection(d => d.Properties).LoadAsync();
+                }
+
+                return dump;
             }
         }
 

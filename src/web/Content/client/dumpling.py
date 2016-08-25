@@ -52,8 +52,10 @@ class Output:
                 log_file.write(output)
 class FileTransforms:
 
+
     @staticmethod
-    def _hash_and_compress(inpath, outpath):
+    def _hash_and_compress(inpath, outpath):     
+        FileTransforms._ensure_dir(outpath)
         with gzip.open(outpath, 'wb') as fComp:
             with open(inpath, 'rb') as fDecomp:
                 BLOCKSIZE = 1024 * 1024
@@ -69,6 +71,7 @@ class FileTransforms:
 
     @staticmethod
     def _hash_and_decompress(inpath, outpath):
+        FileTransforms._ensure_dir(outpath)
         with gzip.open(inpath, 'rb') as fComp:
             with open(outpath, 'wb') as fDecomp:
                 BLOCKSIZE = 1024 * 1024
@@ -81,12 +84,36 @@ class FileTransforms:
                     buf = fComp.read(BLOCKSIZE)
                 fDecomp.flush() 
                 return hash.hexdigest() 
-    
+
+    @staticmethod    
+    def _ensure_dir(path):
+        dir = os.path.dirname(path)    
+        #create the directory if it doesn't exist
+        if not os.path.isdir(os.path.abspath(dir)):
+            os.makedirs(os.path.abspath(dir))
+
 class DumplingService:
     s_inst=None
 
     def __init__(self, baseurl):
         self._dumplingUri = baseurl;
+
+    def GetDumplingManfiest(self, dumpid):
+        url = self._dumplingUri  + 'api/dumplings/' + dumpid + '/manifest'
+
+        Output.Message('retrieving dumpling manifext, dumplingid: %s'%(dumpid))    
+
+        Output.Diagnostic('   url: %s'%(url))
+
+        response = requests.get(url);
+                          
+        Output.Diagnostic('   response: %s'%(response))
+                                                          
+        Output.Diagnostic('   content: %s'%(json.dumps(response.json(), sort_keys=True, indent=4, separators=(',', ': '))))
+        
+        return response.json()
+    
+
 
     def UploadArtifact(self, dumpid, localpath, hash, file):
         
@@ -199,7 +226,7 @@ class FileTransferManager:
 
     def QueueFileDownload(self, hash, abspath):
         if os.path.isdir(abspath):
-            self._dumpSvc.DownloadArtifact(hash, abspath)
+            self._dumpSvc.DowloadArtifactToDirectory(hash, abspath)
         else:
             self._dumpSvc.DownloadArtifact(hash, abspath)
 
@@ -274,6 +301,8 @@ class CommandProcesser:
         #if dumppath was specified call create dump and upload dump
         if self._args.dumppath is not None:
 
+            self._args.dumppath = os.path.abspath(self._args.dumppath)
+
             if self._args.displayname is None:
                 self._args.displayname = str('%s.%.7f'%(getpass.getuser().lower(), time.time()))
 
@@ -295,7 +324,7 @@ class CommandProcesser:
         #choose download path argument downpath takes precedents since downdir has a defualt
         path = self._args.downpath or self._args.downdir
 
-        path = abspath(path)
+        path = os.path.abspath(path)
 
         #determine the directory of the intended download 
         dir = os.path.dirname(path) if self._args.downpath else path
@@ -309,7 +338,18 @@ class CommandProcesser:
         elif self._args.symindex is not None:
             Output.Critical('downloading artifacts from index is not yet supported')
             #self._filequeue.QueueFileIndexDownload(self._args.symindex, abspath)
-    
+        elif self._args.dumpid is not None:
+            dumpManifest = self._dumpSvc.GetDumplingManfiest(self._args.dumpid)
+            
+            dumplingDir = os.path.join(dir, dumpManifest['displayName'])
+            
+            if not os.path.exists(dumplingDir):
+                os.mkdir(dumplingDir)
+
+            for da in dumpManifest['dumpArtifacts']:
+                if 'hash' in da and 'relativePath' in da:
+                    self._filequeue.QueueFileDownload(da['hash'], os.path.join(dumplingDir, da['relativePath'])) 
+
     @staticmethod
     def _add_client_triage_properties(dictProp):
         dictProp = dictProp or { }
@@ -371,7 +411,7 @@ if __name__ == '__main__':
     
     download_idtype = download_parser.add_mutually_exclusive_group(required=True)                                                                                             
     
-    download_idtype.add_argument('--dumpid', type=int, help='the dumpling id of the dump to download for debugging')   
+    download_idtype.add_argument('--dumpid', type=str, help='the dumpling id of the dump to download for debugging')   
     
     download_idtype.add_argument('--hash', type=str, help='the id of the artifact to download')  
    
@@ -383,7 +423,7 @@ if __name__ == '__main__':
     
     update_parser = subparsers.add_parser('update', parents=[outputparser], help='command used for updating dump properties and associated files')
                                                                                                             
-    update_parser.add_argument('--dumpid', type=int, help='the dumpling id the specified updates are to be associated with')
+    update_parser.add_argument('--dumpid', type=str, help='the dumpling id the specified updates are to be associated with')
     
     update_parser.add_argument('--properties', nargs='*', type=_parse_key_value_pair, help='a list of properties and values to be associated with the dump in the format property=value', metavar='property=value')  
     
