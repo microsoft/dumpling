@@ -41,7 +41,7 @@ namespace dumpling.web.Controllers
 
                 foreach(var dump in loadedDumps)
                 {
-                    dumplingDb.Entry(dump).Reference(d => d.Failure);
+                    dumplingDb.Entry(dump).Reference(d => d.Failure).Load();
                     dumplingDb.Entry(dump).Collection(d => d.Properties).Load();
                 }
             }

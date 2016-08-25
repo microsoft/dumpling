@@ -28,10 +28,8 @@ namespace dumpling.web.Controllers
 {
     public class DumplingApiController : ApiController
     {
-        private const int BUFF_SIZE = 1024 * 8;
-
-        public bool AllowDumplicateDumps = true;
-
+        private const int BUFF_SIZE = 1024 * 4;
+        
         [Route("api/client/{*filename}")]
         [HttpGet]
         public HttpResponseMessage GetClientTools(string filename)
@@ -48,18 +46,27 @@ namespace dumpling.web.Controllers
 
         }
 
-        [Route("api/dumplings/{dumplingId}/artifacts")]
+        [Route("api/dumplings/{dumplingId}/manifest")]
         [HttpGet]
-        public async Task<IEnumerable<DumpArtifact>> GetDumplingArtifacts(string dumplingId)
+        public async Task<Dump> GetDumplingManifest(string dumplingId)
         {
             using (DumplingDb dumplingDb = new DumplingDb())
             {
                 var dump = await dumplingDb.Dumps.FindAsync(dumplingId);
 
-                return dump == null ? new DumpArtifact[] { } : dump.DumpArtifacts.ToArray();
+                if(dump != null)
+                {
+                    await dumplingDb.Entry(dump).Reference(d => d.Failure).LoadAsync();
+
+                    await dumplingDb.Entry(dump).Collection(d => d.DumpArtifacts).LoadAsync();
+
+                    await dumplingDb.Entry(dump).Collection(d => d.Properties).LoadAsync();
+                }
+
+                return dump;
             }
         }
-        
+
         public class UploadDumpResponse
         {
             public string dumplingId { get; set; }
@@ -83,7 +90,7 @@ namespace dumpling.web.Controllers
                 var propDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(properties.ToString());
 
                 //update any properties which were pre-existing with the new value
-                foreach(var existingProp in dumpling.Properties)
+                foreach (var existingProp in dumpling.Properties)
                 {
                     string val = null;
 
@@ -97,7 +104,7 @@ namespace dumpling.web.Controllers
 
                 //add any properties which were not previously existsing 
                 //(the existing keys have been removed in previous loop)
-                foreach(var newProp in propDict)
+                foreach (var newProp in propDict)
                 {
                     dumpling.Properties.Add(new Property() { Name = newProp.Key, Value = newProp.Value });
                 }
@@ -153,7 +160,7 @@ namespace dumpling.web.Controllers
                     {
                         var artifactIndex = await dumplingDb.ArtifactIndexes.FindAsync(dumpArtifact.Index);
 
-                        if(artifactIndex != null)
+                        if (artifactIndex != null)
                         {
                             dumpArtifact.Hash = artifactIndex.Hash;
                         }
@@ -194,7 +201,7 @@ namespace dumpling.web.Controllers
                 await dumplingDb.SaveChangesAsync();
             }
         }
-        
+
         [Route("api/artifacts/uploads")]
         [HttpPost]
         public async Task UploadArtifact([FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
@@ -241,6 +248,117 @@ namespace dumpling.web.Controllers
             }
 
             return await GetArtifactRedirectAsync(artifact, cancelToken);
+        }
+
+        [Route("api/dumplings/archived/{dumplingid}")]
+        [HttpGet]
+        public async Task<HttpResponseMessage> DownloadArchivedDump(string dumplingid, CancellationToken cancelToken)
+        {
+            using (var dumplingDb = new DumplingDb())
+            {
+                var dump = await dumplingDb.Dumps.FindAsync(cancelToken, dumplingid);
+
+                if (dump == null)
+                {
+                    return Request.CreateResponse(HttpStatusCode.NotFound);
+                }
+                var archiveTasks = new List<Task>();
+                dumplingDb.Entry(dump).Collection(d => d.Properties).Load();
+                var fileName = dump.DisplayName + ".zip";
+                var tempFile = CreateTempFile();
+
+                try
+                {
+                    using (var zipArchive = new ZipArchive(tempFile, ZipArchiveMode.Create, true))
+                    using (var archiveLock = new SemaphoreSlim(1, 1))
+                    {
+                        //find all the artifacts associated with the dump
+                        foreach (var dumpArtifact in dump.DumpArtifacts.Where(da => da.Hash != null))
+                        {
+                            await dumplingDb.Entry(dumpArtifact).Reference(d => d.Artifact).LoadAsync(cancelToken);
+
+                            archiveTasks.Add(DownloadArtifactToArchiveAsync(dumpArtifact, zipArchive, archiveLock, cancelToken));
+                        }
+
+                        await Task.WhenAll(archiveTasks.ToArray());
+
+                        await tempFile.FlushAsync();
+                    }
+
+                    await tempFile.FlushAsync();
+
+                    tempFile.Position = 0;
+                    HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK);
+                    result.Content = new StreamContent(tempFile);
+                    result.Content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+                    result.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment");
+                    result.Content.Headers.ContentDisposition.FileName = fileName;
+                    return result;
+                }
+                catch
+                {
+                    tempFile.Dispose();
+
+                    throw;
+                }
+            }
+
+        }
+        
+        private async Task DownloadArtifactToArchiveAsync(DumpArtifact dumpArtifact, ZipArchive archive, SemaphoreSlim archiveLock, CancellationToken cancelToken)
+        {
+            if (!cancelToken.IsCancellationRequested)
+            {
+                var blob = DumplingStorageClient.BlobClient.GetBlobReferenceFromServer(new Uri(dumpArtifact.Artifact.Url));
+
+                //download the compressed dump artifact to a temp file
+                using (var tempStream = CreateTempFile())
+                {
+
+                    using (var compStream = CreateTempFile())
+                    {
+                        await blob.DownloadToStreamAsync(compStream, cancelToken);
+
+                        using (var gunzipStream = new GZipStream(compStream, CompressionMode.Decompress, false))
+                        {
+                            await gunzipStream.CopyToAsync(tempStream);
+                        }
+
+                        await tempStream.FlushAsync();
+                    }
+
+                    tempStream.Position = 0;
+
+                    await archiveLock.WaitAsync(cancelToken);
+
+                    if (!cancelToken.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            var entry = archive.CreateEntry(FixupLocalPath(dumpArtifact.LocalPath));
+
+                            using (var entryStream = entry.Open())
+                            {
+                                await tempStream.CopyToAsync(entryStream);
+
+                                await entryStream.FlushAsync();
+                            }
+                        }
+                        finally
+                        {
+                            archiveLock.Release();
+                        }
+                    }
+                }
+            }
+        }
+        
+        //removes the root from the local path and change to posix path separator (for win paths changes root c:\path to c/path)
+        private static string FixupLocalPath(string localPath)
+        {
+            var path = localPath.Replace(":", string.Empty).Replace('\\', '/').TrimStart('/');
+
+            return path;
         }
 
         private async Task<HttpResponseMessage> GetArtifactRedirectAsync(Artifact artifact, CancellationToken cancelToken)
@@ -354,7 +472,56 @@ namespace dumpling.web.Controllers
             await dumplingDb.SaveChangesAsync();
             return artifact;
         }
-        
+
+        private static Stream CreateTempFile(string path = null)
+        {
+            path = path ?? Path.GetTempFileName();
+
+            string root = HttpContext.Current.Server.MapPath("~/App_Data/temp");
+
+            string tempPath = Path.Combine(root, path);
+
+            if(!Directory.Exists(Path.GetDirectoryName(tempPath)))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(tempPath));
+            }
+
+            //this file is not disposed of here b/c it is deleted on close
+            //callers of this method are responsible for disposing the file
+            return File.Create(tempPath, BUFF_SIZE, FileOptions.Asynchronous | FileOptions.DeleteOnClose | FileOptions.RandomAccess);
+        }
+
+        private static async Task<string> DecompAndHashAsync(Stream compressed, Stream decompressed, CancellationToken cancelToken)
+        {
+            string hash = null;
+
+            using (var sha1 = SHA1.Create())
+            using (var gzStream = new GZipStream(compressed, CompressionMode.Decompress, true))
+            {
+                var buff = new byte[BUFF_SIZE];
+
+                int cbyte;
+
+                while ((cbyte = await gzStream.ReadAsync(buff, 0, buff.Length)) > 0 && !cancelToken.IsCancellationRequested)
+                {
+                    sha1.TransformBlock(buff, 0, cbyte, buff, 0);
+
+                    await decompressed.WriteAsync(buff, 0, cbyte);
+                }
+
+                await decompressed.FlushAsync();
+
+                if (!cancelToken.IsCancellationRequested)
+                {
+                    sha1.TransformFinalBlock(buff, 0, 0);
+
+                    hash = string.Concat(sha1.Hash.Select(b => b.ToString("x2"))).ToLowerInvariant();
+                }
+            }
+
+            return hash;
+
+        }
         private class DumpArtifactUploader : ArtifactUploader
         {
             private object _fileFormatReader;
@@ -644,41 +811,51 @@ namespace dumpling.web.Controllers
 
             private async Task DecompAndHashAsync(CancellationToken cancelToken)
             {
-                using (var sha1 = SHA1.Create())
-                using (var gzStream = new GZipStream(Compressed, CompressionMode.Decompress, true))
-                {
-                    var buff = new byte[BUFF_SIZE];
-
-                    int cbyte;
-
-                    while ((cbyte = await gzStream.ReadAsync(buff, 0, buff.Length)) > 0 && !cancelToken.IsCancellationRequested)
-                    {
-                        sha1.TransformBlock(buff, 0, cbyte, buff, 0);
-
-                        await Decompressed.WriteAsync(buff, 0, cbyte);
-                    }
-
-                    await Decompressed.FlushAsync();
-
-                    if (!cancelToken.IsCancellationRequested)
-                    {
-                        sha1.TransformFinalBlock(buff, 0, 0);
-
-                        Hash = string.Concat(sha1.Hash.Select(b => b.ToString("x2"))).ToLowerInvariant();
-                    }
-                }
-                
+                this.Hash = await DumplingApiController.DecompAndHashAsync(this.Compressed, this.Decompressed, cancelToken);
             }
-            
-            private Stream CreateTempFile()
+        }
+
+        private class TempDirectory : IDisposable
+        {
+            private string _basepath;
+
+            public TempDirectory()
             {
                 string root = HttpContext.Current.Server.MapPath("~/App_Data");
 
-                string tempPath = Path.Combine(root, Path.GetTempFileName());
+                string _basepath = Path.Combine(root, Path.GetTempFileName());
 
-                //this file is not disposed of here b/c it is deleted on close
-                //callers of this method are responsible for disposing the file
-                return File.Create(tempPath, BUFF_SIZE, FileOptions.Asynchronous | FileOptions.DeleteOnClose | FileOptions.RandomAccess);
+                Directory.CreateDirectory(_basepath);
+            }
+
+            public string BasePath
+            {
+                get { return _basepath; }
+            }
+
+            public Stream CreateTempFile(string relativePath)
+            {
+                return File.Create(Path.Combine(_basepath, relativePath), BUFF_SIZE, FileOptions.Asynchronous | FileOptions.RandomAccess);
+            }
+
+            public void Dispose()
+            {
+                NukeDir(_basepath);
+            }
+            
+            private void NukeDir(string path)
+            {
+                foreach (var dirpath in Directory.EnumerateDirectories(path))
+                {
+                    NukeDir(dirpath);
+                }
+
+                foreach (var filepath in Directory.EnumerateFiles(path))
+                {
+                    File.Delete(filepath);
+                }
+
+                Directory.Delete(path);
             }
         }
     }

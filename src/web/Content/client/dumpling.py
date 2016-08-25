@@ -20,11 +20,15 @@ import tempfile
 import hashlib  
 import zlib
 import gzip
+import threading
+import multiprocessing
+import datetime
 
 class Output:
     s_squelch=False
     s_verbose=False
-    s_logPath='';
+    s_logPath=''
+    s_lock=threading.Lock()
 
     @staticmethod
     def Diagnostic(output):
@@ -42,18 +46,26 @@ class Output:
 
     @staticmethod
     def Print(output):
-        # always print out essential information.
-        print output
+        Output.s_lock.acquire()
+
+        try:
+            # always print out essential information.
+            print output
         
-        # sometimes amend our essential output to an existing log file.
-        if(Output.s_logPath is not None and os.path.isfile(Output.s_logPath)):
-            # Note: The file must exist.
-            with open(Output.s_logPath, 'a') as log_file:
-                log_file.write(output)
+            # sometimes amend our essential output to an existing log file.
+            if(Output.s_logPath is not None and os.path.isfile(Output.s_logPath)):
+                # Note: The file must exist.
+                with open(Output.s_logPath, 'a') as log_file:
+                    log_file.write(output)
+        finally:
+            Output.s_lock.release()
+        
 class FileTransforms:
 
+
     @staticmethod
-    def _hash_and_compress(inpath, outpath):
+    def _hash_and_compress(inpath, outpath):     
+        FileTransforms._ensure_dir(outpath)
         with gzip.open(outpath, 'wb') as fComp:
             with open(inpath, 'rb') as fDecomp:
                 BLOCKSIZE = 1024 * 1024
@@ -69,6 +81,7 @@ class FileTransforms:
 
     @staticmethod
     def _hash_and_decompress(inpath, outpath):
+        FileTransforms._ensure_dir(outpath)
         with gzip.open(inpath, 'rb') as fComp:
             with open(outpath, 'wb') as fDecomp:
                 BLOCKSIZE = 1024 * 1024
@@ -81,12 +94,39 @@ class FileTransforms:
                     buf = fComp.read(BLOCKSIZE)
                 fDecomp.flush() 
                 return hash.hexdigest() 
-    
+
+    @staticmethod    
+    def _ensure_dir(path):
+        dir = os.path.dirname(path)    
+        #create the directory if it doesn't exist
+        if not os.path.isdir(os.path.abspath(dir)):
+            try:
+                os.makedirs(os.path.abspath(dir))
+            except:
+                return
+
 class DumplingService:
     s_inst=None
 
     def __init__(self, baseurl):
         self._dumplingUri = baseurl;
+
+    def GetDumplingManfiest(self, dumpid):
+        url = self._dumplingUri  + 'api/dumplings/' + dumpid + '/manifest'
+
+        Output.Message('retrieving dumpling %s manifest'%(dumpid))    
+
+        Output.Diagnostic('   url: %s'%(url))
+
+        response = requests.get(url);
+                          
+        Output.Diagnostic('   response: %s'%(response))
+                                                          
+        Output.Diagnostic('   content: %s'%(json.dumps(response.json(), sort_keys=True, indent=4, separators=(',', ': '))))
+        
+        return response.json()
+    
+
 
     def UploadArtifact(self, dumpid, localpath, hash, file):
         
@@ -111,7 +151,12 @@ class DumplingService:
         response.raise_for_status()
 
     
-    def DownloadArtifact(self, hash, downpath):              
+    def DownloadArtifact(self, hash, downpath):  
+        if os.path.isdir(downpath):
+            self._dumpSvc.DowloadArtifactToDirectory(hash, downpath)
+
+            return
+
         url = self._dumplingUri + 'api/artifacts/' + hash
 
         Output.Diagnostic('   url: %s'%(url))
@@ -188,31 +233,107 @@ class DumplingService:
             Output.Critical("ERROR: downloaded file did not match expected hash value")
             os.remove(path)
         else: 
-            Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))   
-   
+            Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))                
 
+class ThreadPool:
+    s_MaxThreads = multiprocessing.cpu_count()
+
+    def __init__(self, maxthreads = None):
+        self._condvar = threading.Condition(threading.RLock())
+        self._threadcount = 0
+        self._availcount = 0
+        self._queue = [ ]
+        self._emptyevent = threading.Event()
+        self._maxthreads = maxthreads or ThreadPool.s_MaxThreads
+        self._draining = False
+    
+    def queue_work(self, func, args=()):
+        self._condvar.acquire()
+
+        if not self._draining:
+            self._queue.append( (func, args) )
+
+            if self._availcount == 0 and self._threadcount < self._maxthreads:
+                self._threadcount += 1
+                self._add_thread()
+
+            self._condvar.notify()
+        else:
+            raise RuntimeError('the thread pool is currently draining and not available to queue work items')
+
+        self._condvar.release()
+            
+    def drain(self):
+        self._condvar.acquire()
+        self._draining = True
+        self._condvar.release()
+        self._emptyevent.wait()
+
+    def _add_thread(self):
+        thread = threading.Thread(target=self._process_queue_items, args=())
+        thread.start()
+
+    def _process_queue_items(self):
+        while True:
+            self._condvar.acquire()
+            if len(self._queue) == 0: 
+                if self._draining:
+                    self._condvar.notify_all()
+                    self._threadcount -= 1
+                    if self._threadcount == 0:
+                        self._emptyevent.set() 
+                    self._condvar.release()             
+                    return
+                self._availcount = self._availcount + 1
+                self._condvar.wait()
+                self._availcount = self._availcount - 1
+            work = self._queue.pop(0)
+            func = work[0]
+            args = work[1]
+            self._condvar.release()
+            func(*args[0:])
         
 class FileTransferManager:
-    def __init__(self, dumpSvc):
+
+    def __init__(self, dumpSvc, maxthreads = None):
         self._hashmap = { }
         self._dumpSvc = dumpSvc
-
+        self._threadpool = ThreadPool(maxthreads)
+        self._threadpool._maxthreads
+         
     def QueueFileDownload(self, hash, abspath):
-        if os.path.isdir(abspath):
+        if self._threadpool._maxthreads <= 1:
             self._dumpSvc.DownloadArtifact(hash, abspath)
-        else:
-            self._dumpSvc.DownloadArtifact(hash, abspath)
-
+        else:                                       
+            self._threadpool.queue_work(self._dumpSvc.DownloadArtifact, args=(hash, abspath))
+        
     def QueueFileUpload(self, dumpid, abspath):
+        if self._threadpool._maxthreads <= 1:
+            self._compress_and_upload(dumpid, abspath)
+        else:                                                                                     
+            self._threadpool.queue_work(self._compress_and_upload, args=(dumpid, abspath))
+
+    def WaitForPendingTransfers(self):
+        if self._threadpool._maxthreads > 1:
+            self._threadpool.drain()
+
+    def _compress_and_upload(self, dumpid, abspath):              
         hash = None
         Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(abspath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
-        fhash = FileTransforms._hash_and_compress(abspath, tempPath)
-        Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
-        with open(tempPath, 'rb') as fUpld:
-            self._dumpSvc.UploadArtifact(dumpid, abspath, fhash, fUpld)    
-        os.remove(tempPath)
-    
+        try:
+            fhash = FileTransforms._hash_and_compress(abspath, tempPath)
+            Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
+            with open(tempPath, 'rb') as fUpld:
+                self._dumpSvc.UploadArtifact(dumpid, abspath, fhash, fUpld)    
+        
+        finally:
+            try:
+                os.remove(tempPath)
+            except:
+                Output.Message('WARNING: failed to remove temp file %s'%(tempPath))
+                
+
     def UploadDump(self, dumppath, incpaths, origin, displayname):
         #
         hash = None
@@ -230,7 +351,7 @@ class FileTransferManager:
         #
         for abspath in self._add_upload_paths(incpaths):
             self.QueueFileUpload(dumpid, abspath)          
-
+    
     def _add_upload_path(self, abspath):
         if not self._hashmap.has_key(abspath):
             self._hashmap[abspath] = None
@@ -274,6 +395,8 @@ class CommandProcesser:
         #if dumppath was specified call create dump and upload dump
         if self._args.dumppath is not None:
 
+            self._args.dumppath = os.path.abspath(self._args.dumppath)
+
             if self._args.displayname is None:
                 self._args.displayname = str('%s.%.7f'%(getpass.getuser().lower(), time.time()))
 
@@ -289,13 +412,15 @@ class CommandProcesser:
         if not (self._args.incpaths is None or len(self._args.incpaths) == 0):
             self._filequeue.UploadFiles(dumpid, args.incpaths)
 
+        self._filequeue.WaitForPendingTransfers();
+
         
     def Download(self):
         
         #choose download path argument downpath takes precedents since downdir has a defualt
         path = self._args.downpath or self._args.downdir
 
-        path = abspath(path)
+        path = os.path.abspath(path)
 
         #determine the directory of the intended download 
         dir = os.path.dirname(path) if self._args.downpath else path
@@ -309,7 +434,20 @@ class CommandProcesser:
         elif self._args.symindex is not None:
             Output.Critical('downloading artifacts from index is not yet supported')
             #self._filequeue.QueueFileIndexDownload(self._args.symindex, abspath)
-    
+        elif self._args.dumpid is not None:
+            dumpManifest = self._dumpSvc.GetDumplingManfiest(self._args.dumpid)
+            
+            dumplingDir = os.path.join(dir, dumpManifest['displayName'])
+            
+            if not os.path.exists(dumplingDir):
+                os.mkdir(dumplingDir)
+
+            for da in dumpManifest['dumpArtifacts']:
+                if 'hash' in da and 'relativePath' in da:
+                    self._filequeue.QueueFileDownload(da['hash'], os.path.join(dumplingDir, da['relativePath'])) 
+
+        self._filequeue.WaitForPendingTransfers();
+
     @staticmethod
     def _add_client_triage_properties(dictProp):
         dictProp = dictProp or { }
@@ -338,6 +476,8 @@ def _parse_key_value_pair(argStr):
         raise argparse.ArgumentError('the specified property key value pair is invalid. ' + argstr)
 
 if __name__ == '__main__':
+
+    starttime = datetime.datetime.now();
 
     outputparser = argparse.ArgumentParser(add_help=False)
     
@@ -371,7 +511,7 @@ if __name__ == '__main__':
     
     download_idtype = download_parser.add_mutually_exclusive_group(required=True)                                                                                             
     
-    download_idtype.add_argument('--dumpid', type=int, help='the dumpling id of the dump to download for debugging')   
+    download_idtype.add_argument('--dumpid', type=str, help='the dumpling id of the dump to download for debugging')   
     
     download_idtype.add_argument('--hash', type=str, help='the id of the artifact to download')  
    
@@ -383,7 +523,7 @@ if __name__ == '__main__':
     
     update_parser = subparsers.add_parser('update', parents=[outputparser], help='command used for updating dump properties and associated files')
                                                                                                             
-    update_parser.add_argument('--dumpid', type=int, help='the dumpling id the specified updates are to be associated with')
+    update_parser.add_argument('--dumpid', type=str, help='the dumpling id the specified updates are to be associated with')
     
     update_parser.add_argument('--properties', nargs='*', type=_parse_key_value_pair, help='a list of properties and values to be associated with the dump in the format property=value', metavar='property=value')  
     
@@ -403,6 +543,8 @@ if __name__ == '__main__':
     filequeue = FileTransferManager(DumplingService.s_inst)
     cmdProcesser = CommandProcesser(args, filequeue, DumplingService.s_inst)
     cmdProcesser.Process()
+
+    Output.Message('total elapsed time %s'%(datetime.datetime.now() - starttime))
 
 
 

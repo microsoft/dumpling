@@ -10,11 +10,13 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
+using System.Runtime.Serialization;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace dumpling.db
 {
+    [DataContract]
     public class Artifact
     {
         public Artifact()
@@ -24,15 +26,19 @@ namespace dumpling.db
 
         [Key]
         [StringLength(40)]
+        [DataMember]
         public string Hash { get; set; }
-        
-        public string FileName { get; set; }
 
+        [DataMember]
+        public string FileName { get; set; }
+        
         public string Url { get; set; }
 
         [Required]
+        [DataMember]
         public string Format { get; set; }
-        
+
+        [DataMember]
         public DateTime UploadTime { get; set; }
 
         public virtual ICollection<ArtifactIndex> Indexes { get; set; }
