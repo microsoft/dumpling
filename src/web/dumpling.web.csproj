@@ -48,7 +48,7 @@
   <ItemGroup>
     <Reference Include="FileIndexers, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\packages\FileIndexers.1.0.4\lib\net46\FileIndexers.dll</HintPath>
+      <HintPath>..\..\packages\Microsoft.SymStore.Indexers.1.0.8\lib\net46\FileIndexers.dll</HintPath>
       <Private>True</Private>
     </Reference>
     <Reference Include="Microsoft.Azure.KeyVault.Core">
