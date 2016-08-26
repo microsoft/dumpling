@@ -6,7 +6,7 @@
     <link href='https://fonts.googleapis.com/css?family=Numans' rel='stylesheet' type='text/css'>
     <style>
         a {
-            color: #FF9976;
+            color: blue;
         }
 
         table.buckets {
@@ -35,12 +35,12 @@
             font-family: 'Numans', sans-serif;
             font-size: 32px;
             text-align: center;
-            vertical-align: top;
-            background-color: #FFECE5;
+            vertical-align: central;
+            background-color: lightyellow;
             width: 85px;
             color: #000000;
             border-top-width: thin;
-            border-top-color: #FFCCC5;
+            border-top-color: #ff6a00;
             border-top-style: solid;
         }
 
@@ -51,15 +51,16 @@
         th.dumps {
             text-align: right;
         }
-
+        
         td.dumps {
-            font-family: 'Open Sans', sans-serif;
+            font-family: 'Courier', monospace;
         }
 
         td.failure_hash {
-            font-family: 'Graduate', sans-serif;
-            font-size: 16px;
-            text-align: right;
+            font-family: 'Courier', monospace;
+            font-size: 28px;
+            font-weight: bolder;
+            text-align: left;
             background-color: #FFFAFA;
             column-span: all;
             color: #000000;
@@ -81,7 +82,19 @@
         td.dumpid {
             background-color: lightyellow;
             vertical-align: top;
-            width: 85px;
+            width: auto;
+            margin-right: 20px;
+            text-align: left;
+        }
+
+            td.dumpid:hover {
+                background-color: yellow;
+            }
+
+        td.download {
+            background-color: lightyellow;
+            vertical-align: top;
+            width: 40px;
             text-align: right;
         }
 
@@ -90,25 +103,25 @@
             }
 
         td.dumpuploaded {
-            background-color: mintcream;
+            background-color: lightyellow;
             vertical-align: top;
             width: 165px;
-            text-align: right;
+            text-align: left;
         }
 
             td.dumpuploaded:hover {
-                background-color: mediumspringgreen;
+                background-color: yellow;
             }
 
         td.dumpusername {
-            background-color: aliceblue;
+            background-color: lightyellow;
             vertical-align: top;
             width: 85px;
-            text-align: right;
+            text-align: left;
         }
 
             td.dumpusername:hover {
-                background-color: lightblue;
+                background-color: yellow;
             }
 
         td.bugurl {
@@ -177,41 +190,44 @@
         <table class="buckets">
             @foreach (var failure in (ViewData["Failures"] as string[]))
             {
-                <tr style="border-top:thin solid #FFCCC5;">
+                <tr style="border-top:thin solid #ff6a00;">
                     <td class="failure_hash"><p>@Html.Encode(failure)</p></td>
                     <td class="hitcount" rowspan="2" align="center" valign="middle">
                         <p>@Html.Encode((ViewData[failure ?? "UNTRIAGED"] as dumpling.db.Dump[]).Count())</p>
                     </td>
                 </tr>
-                <tr style="border-top:thin solid #FFCCC5;vertical-align:baseline" onmouseover="">
+                <tr style="border-top:thin solid #ff6a00;vertical-align:baseline" onmouseover="">
                     <td align="left">
                         <table class="dumps">
                             <tr>
-                                <th class="dumpname">
-                                    display name
-                                </th>
-
                                 <th class="dumpid">
                                     dumpling-id
                                 </th>
 
-                                <th class="dumpuploaded">
-                                    uploaded
+                                <th class="dumpname">
+                                    display name
                                 </th>
+
                                 <th class="dumpusername">
                                     username
                                 </th>
+                                <th class="dumpuploaded">
+                                    uploaded
+                                </th>
+                                <th class="download">
+                                </th>
+
                             </tr>
 
                             @foreach (dumpling.db.Dump dump in (ViewData[failure] as dumpling.db.Dump[]))
                             {
-                                <tr style="border-top:thin solid #FFCCC5;">
+                                <tr style="border-top:thin solid #ff6a00">
+                                    <td class="dumpid"><p>@(dump.DumpId)</p></td>
                                     <td class="dumpname" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">@(dump.DisplayName)</td>
-                                    <td class="dumpid">
-                                        <a href="api/dumplings/archived/@(dump.DumpId)"><img src="~/Content/images/dload.png" onmouseout="this.src='@Url.Content("~/Content/images/dload.png")'" onmouseover="this.src='@Url.Content("~/Content/images/dload_hover.png")'" /></a> @(dump.DumpId)
-                                    </td>
-                                    <td class="dumpuploaded">@(dump.DumpTime)</td>
+
                                     <td class="dumpusername">@(dump.Origin)</td>
+                                    <td class="dumpuploaded">@(dump.DumpTime)</td>
+                                    <td class="download"><a href="api/dumplings/archived/@(dump.DumpId)">download</a></td>
                                 </tr>
                                 <tr>
                                     <td align="right" id="datarow.@(dump.DumpId)" colspan="4"></td>
