@@ -119,7 +119,7 @@
             font-weight: bolder;
             background-color: transparent;
             vertical-align: top;
-            width: 165px;
+            width: 200px;
             text-align: left;
         }
 
@@ -233,7 +233,9 @@
                                     <td class="dumpid" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)"><p>@(dump.DumpId)</p></td>
                                     <td class="dumpname" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">@(dump.DisplayName)</td>
                                     <td class="dumpusername" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">@(dump.Origin)</td>
-                                    <td class="dumpuploaded" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">@(dump.DumpTime)</td>
+                                    <td class="dumpuploaded" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">
+                                        <script type="text/javascript"> var strDate = new String('@(dump.DumpTime.ToString() + " UTC")'); var localTime = new Date(strDate); document.write(localTime.toLocaleString()); </script>
+                                    </td>
                                     <td class="download"><a href="api/dumplings/archived/@(dump.DumpId)">download</a></td>
                                 </tr>
                                 <tr>
