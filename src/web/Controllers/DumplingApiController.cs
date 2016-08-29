@@ -584,12 +584,12 @@ namespace dumpling.web.Controllers
                     foreach (var image in coreFile.LoadedImages)
                     {
                         string index = null;
-
+                        byte[] buildId = null;
                         try
                         {
                             //this call will throw an exception if the loaded image doesn't have a build id.  
                             //Unfortunately there is no way to check if build id exists without ex
-                            var buildId = image.Image.BuildID;
+                            buildId = image.Image.BuildID;
 
                             if (buildId != null)
                             {
@@ -599,6 +599,19 @@ namespace dumpling.web.Controllers
                         catch { }
 
                         dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = image.Path, Index = index, DebugCritical = true });
+
+                        //if the image is libcoreclr.so also add libmscordaccore.so and libsos.so at the same path
+                        if(Path.GetFileName(image.Path) == "libcoreclr.so")
+                        {
+                            var localDir = Path.GetDirectoryName(image.Path);
+
+                            //currently the dac index and the sos index are not imbedded in libcoreclr.so 
+                            //this should eventually be the case, but for now set the indexes using the buildid from libcoreclr.so
+                            //and we will manually add these indexes to the atifact store
+                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libmscordaccore.so"), Index = BuildIndexFromModuleUUID(buildId, ELF_INDEXSTYLE_ID, "libmscordaccore.so"), DebugCritical = true });
+
+                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libsos.so"), Index = BuildIndexFromModuleUUID(buildId, ELF_INDEXSTYLE_ID, "libsos.so"), DebugCritical = true });
+                        }
                     }
 
                     return dumpArtifacts;

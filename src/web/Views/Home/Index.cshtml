@@ -5,8 +5,12 @@
     <link href='https://fonts.googleapis.com/css?family=Open+Sans' rel='stylesheet' type='text/css'>
     <link href='https://fonts.googleapis.com/css?family=Numans' rel='stylesheet' type='text/css'>
     <style>
-        a {
+        a:link {
             color: blue;
+        }
+
+        a:visited {
+            color: blueviolet
         }
 
         table.buckets {
@@ -52,12 +56,24 @@
             text-align: right;
         }
         
+        tr.dumprow {
+            background-color: lightyellow;
+            border-top-width: thin;
+            border-top-color: #ff6a00;
+            border-top-style: solid;
+        }
+            tr.dumprow:hover { 
+                background-color: yellow;
+            }
+
+
         td.dumps {
             font-family: 'Courier', monospace;
         }
 
         td.failure_hash {
             font-family: 'Courier', monospace;
+            font-weight: bolder;
             font-size: 28px;
             font-weight: bolder;
             text-align: left;
@@ -69,60 +85,53 @@
         }
 
         td.dumpname {
-            background-color: lightyellow;
+            font-family: 'Courier', monospace;
+            font-weight: bolder;
+            background-color: transparent;
             width: auto;
             vertical-align: top;
             text-align: left;
         }
 
-            td.dumpname:hover {
-                background-color: yellow;
-            }
-
         td.dumpid {
-            background-color: lightyellow;
+            font-family: 'Courier', monospace;
+            font-weight: bolder;
+            background-color: transparent;
             vertical-align: top;
             width: auto;
             margin-right: 20px;
             text-align: left;
         }
 
-            td.dumpid:hover {
-                background-color: yellow;
-            }
 
         td.download {
-            background-color: lightyellow;
+            font-family: 'Courier', monospace;
+            font-weight: bolder;
+            background-color: transparent;
             vertical-align: top;
             width: 40px;
             text-align: right;
         }
 
-            td.dumpid:hover {
-                background-color: yellow;
-            }
 
         td.dumpuploaded {
-            background-color: lightyellow;
+            font-family: 'Courier', monospace;
+            font-weight: bolder;
+            background-color: transparent;
             vertical-align: top;
-            width: 165px;
+            width: 200px;
             text-align: left;
         }
 
-            td.dumpuploaded:hover {
-                background-color: yellow;
-            }
 
         td.dumpusername {
-            background-color: lightyellow;
+            font-family: 'Courier', monospace;
+            font-weight: bolder;
+            background-color: transparent;
             vertical-align: top;
             width: 85px;
             text-align: left;
         }
-
-            td.dumpusername:hover {
-                background-color: yellow;
-            }
 
         td.bugurl {
         }
@@ -139,7 +148,6 @@
         {
             @Html.Raw($"data[\"{properties.Key}\"] = {properties.Value};");
         }
-
 
         function onMouseUp_toggleTable(currentElement)
         {
@@ -221,12 +229,13 @@
 
                             @foreach (dumpling.db.Dump dump in (ViewData[failure] as dumpling.db.Dump[]))
                             {
-                                <tr style="border-top:thin solid #ff6a00">
-                                    <td class="dumpid"><p>@(dump.DumpId)</p></td>
+                                <tr class="dumprow">
+                                    <td class="dumpid" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)"><p>@(dump.DumpId)</p></td>
                                     <td class="dumpname" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">@(dump.DisplayName)</td>
-
-                                    <td class="dumpusername">@(dump.Origin)</td>
-                                    <td class="dumpuploaded">@(dump.DumpTime)</td>
+                                    <td class="dumpusername" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">@(dump.Origin)</td>
+                                    <td class="dumpuploaded" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">
+                                        <script type="text/javascript"> var strDate = new String('@(dump.DumpTime.ToString() + " UTC")'); var localTime = new Date(strDate); document.write(localTime.toLocaleString()); </script>
+                                    </td>
                                     <td class="download"><a href="api/dumplings/archived/@(dump.DumpId)">download</a></td>
                                 </tr>
                                 <tr>

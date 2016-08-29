@@ -8,35 +8,41 @@
     @Styles.Render("~/Content/css")
     @Scripts.Render("~/bundles/modernizr")
 </head>
-<body style="align-self:stretch">
-    <div class="navbar navbar-inverse navbar-fixed-top" style="float:left">
-        <div class="container">
-            <div class="navbar-header" style="float:left">
-                
+<body>
+    <div class="navbar navbar-inverse navbar-fixed-top">
+        <div class="container-fluid">
+            <ul class="nav navbar-nav">
+                <li>&nbsp;</li>
+            </ul>
+            <div class="navbar-header">
                 <img src="~/Content/images/dumpling.png" />
-                <b class="navbar-brand" style="margin-right:200px">dumpling</b>
-                
+                <b class="navbar-brand">dumpling</b>
             </div>
-            <div class="navbar-collapse collapse" style="float:right">
-                <ul class="nav navbar-nav">
+            <div class="navbar-collapse collapse">
+                <ul class="nav navbar-nav navbar-right">
                     <li><a href="http://www.github.com/microsoft/dumpling">the repository</a></li>
                     <li><a href="~/api/client/dumpling.py">the client</a></li>
+                    <li>&nbsp;</li>
                 </ul>
             </div>
         </div>
     </div>
     <div style="margin-top:25px">
-        <p >
+        <p>
             @RenderBody()
         </p>
         <hr />
-        <footer>
-            <div style="margin-left:20px">
-                <a href="https://msdn.microsoft.com/en-us/dn529288" style="margin-right:100px">Privacy</a>
-                <a href="https://msdn.microsoft.com/en-us/cc300389">Terms of use</a>
-            </div>
-            <div>
-                <p class="modal-footer">&copy; @DateTime.Now.Year - Microsoft Corporation</p>
+        <footer class="footer navbar-fixed-bottom">
+            <div class="container-fluid">
+                <ul class="nav navbar-nav">
+                    <li>&nbsp;</li>
+                    <li><a href="https://msdn.microsoft.com/en-us/dn529288">Privacy</a></li>
+                    <li><a href="https://msdn.microsoft.com/en-us/cc300389">Terms of use</a></li>
+                </ul>
+                <ul class="nav navbar-nav navbar-right">
+                    <li>&copy; @DateTime.Now.Year - Microsoft Corporation</li>
+                    <li>&nbsp;</li>
+                </ul>
             </div>
         </footer>
     </div>
