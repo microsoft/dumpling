@@ -279,9 +279,7 @@ class ThreadPool:
             if len(self._queue) == 0: 
                 if self._draining:
                     self._condvar.notify_all()
-                    self._threadcount -= 1
-                    if self._threadcount == 0:
-                        self._emptyevent.set() 
+                    self._thread_exit()
                     self._condvar.release()             
                     return
                 self._availcount = self._availcount + 1
@@ -291,7 +289,18 @@ class ThreadPool:
             func = work[0]
             args = work[1]
             self._condvar.release()
-            func(*args[0:])
+            try:
+                func(*args[0:])
+            except:
+                self._thread_exit()
+                raise
+
+    def _thread_exit(self):
+        self._condvar.acquire()                     
+        self._threadcount -= 1
+        if self._draining and len(self._queue) == 0 and self._threadcount == 0:
+            self._emptyevent.set() 
+        self._condvar.release()   
         
 class FileTransferManager:
 
@@ -444,7 +453,10 @@ class CommandProcesser:
 
             for da in dumpManifest['dumpArtifacts']:
                 if 'hash' in da and 'relativePath' in da:
-                    self._filequeue.QueueFileDownload(da['hash'], os.path.join(dumplingDir, da['relativePath'])) 
+                    hash = da['hash']
+                    relPath = da['relativePath']
+                    if hash and relPath:
+                        self._filequeue.QueueFileDownload(hash, os.path.join(dumplingDir, relPath)) 
 
         self._filequeue.WaitForPendingTransfers();
 
