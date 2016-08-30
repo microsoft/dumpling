@@ -23,10 +23,15 @@ import gzip
 import threading
 import multiprocessing
 import datetime
+import copy
+
+def _json_format(obj):
+    return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
 
 class Output:
     s_squelch=False
     s_verbose=False
+    s_noprompt=False
     s_logPath=''
     s_lock=threading.Lock()
 
@@ -59,7 +64,20 @@ class Output:
                     log_file.write(output)
         finally:
             Output.s_lock.release()
-        
+     
+    @staticmethod
+    def Prompt_YN(prompt):
+        if Output.s_noprompt or Output.s_squelch:
+            return True
+        Output.s_lock.acquire()
+        result = None
+        try:
+            while(result != 'y' and result != 'n'):
+                result = raw_input(prompt + ' [Y/N]: ').lower()
+        finally:
+            Output.s_lock.release()
+        return result == 'y'
+
 class FileTransforms:
 
 
@@ -122,7 +140,7 @@ class DumplingService:
                           
         Output.Diagnostic('   response: %s'%(response))
                                                           
-        Output.Diagnostic('   content: %s'%(json.dumps(response.json(), sort_keys=True, indent=4, separators=(',', ': '))))
+        Output.Diagnostic('   content: %s'%(_json_format(response.json())))
         
         return response.json()
     
@@ -209,7 +227,7 @@ class DumplingService:
         
         Output.Diagnostic('   url: %s'%(url))
 
-        Output.Diagnostic('   data: %s'%(json.dumps(dictProps)))
+        Output.Diagnostic('   data: %s'%(_json_format(dictProps)))
 
         response = requests.post(url, data=dictProps)    
 
@@ -382,8 +400,6 @@ class FileTransferManager:
                 if self._add_upload_path(abspath):
                     yield abspath
 
-
-
 class CommandProcesser:
     def __init__(self, args, filequeue, dumpSvc):
         self._args = args
@@ -395,6 +411,28 @@ class CommandProcesser:
             self.Upload()
         elif self._args.command == 'download':
             self.Download()
+        elif self._args.command == 'config':
+            self.Config()
+                        
+    def Config(self):
+        if self._args.action == 'dump':
+            config = DumplingConfig.Load(self._args.configpath)
+            if config is None:
+                Output.Message('no dumpling configuration file was found')            
+            else:
+                Output.Message(str(config))
+        
+        if self._args.action == 'save':
+            Output.Message(str(self._args))
+            self._args.Save(self._args.configpath)
+                                                               
+        if self._args.action == 'clear':
+            if os.path.isfile(self._args.configpath) and Output.Prompt_YN('Delete file "%s"?'%(self._args.configpath)):
+                os.remove(self._args.configpath)
+                Output.Message('Configuration cleared') 
+            else:
+                Output.Message('Command aborted. No changes were made.')                                                                                                                       
+            
 
     def Upload(self):
         #if nothing was specified to upload
@@ -481,6 +519,43 @@ class CommandProcesser:
         if not key in dictProp:
             dictProp[key] = val
 
+class DumplingConfig:
+
+    s_unsaved_args = dict([(k, None) for k in ['action', 'command', 'configpath', 'verbose', 'squelch', 'noprompt']]) #{ 'action': None, 'command': None, 'configpath': None, 'squelch': None }
+    s_default_args = { 'url': 'https://dumpling.azurewebsites.net/' }
+    def __init__(self, dictConfig):
+        self.__dict__ = copy.copy(DumplingConfig.s_default_args)
+
+        self.Merge(dictConfig)
+
+    @staticmethod
+    def Load(strpath):           
+        if not os.path.isfile(strpath):
+            return None
+
+        try:
+            with open(strpath, 'r') as fconfig:
+                dict = json.load(fconfig)
+                return DumplingConfig(dict)
+        except:
+            return None
+    
+    def Merge(self, dictConfig):
+        for key, value in dictConfig.iteritems():
+            if value or key not in self.__dict__:
+                self.__dict__[key] = value
+
+    def Save(self, strpath):
+        with open(strpath, 'w') as fconfig:
+            json.dump(self._persistable_args(), fconfig, sort_keys=True, indent=4, separators=(',', ': '))  
+            Output.Message('configuration saved to %s'%(strpath))
+
+    def _persistable_args(self):
+        return dict([(key, value) for key, value in self.__dict__.iteritems() if key not in DumplingConfig.s_unsaved_args and value])
+
+    def __str__(self):
+        return _json_format(self._persistable_args())
+
 def _parse_key_value_pair(argStr):
     kvp = string.split(argStr, '=', 1)
 
@@ -491,19 +566,29 @@ if __name__ == '__main__':
 
     starttime = datetime.datetime.now();
 
-    outputparser = argparse.ArgumentParser(add_help=False)
+    sharedparser = argparse.ArgumentParser(add_help=False)
     
-    outputparser.add_argument('--verbose', default=False, action='store_true', help='Indicates that we should print all critical, standard, and diagnostic messages.')
+    sharedparser.add_argument('--verbose', default=False, action='store_true', help='indicates that  all critical, standard, and diagnostic messages should be output')
 
-    outputparser.add_argument('--squelch', default=False, action='store_true', help='Indicates that we should only print critical messages.')
+    sharedparser.add_argument('--squelch', default=False, action='store_true', help='indicates that only critical messages should be ouput')
                                  
-    outputparser.add_argument('--logpath', type=str, help='specify the path to a log file for appending message output.')
+    sharedparser.add_argument('--noprompt', default=False, action='store_true', help='suppress prompts for user input')
 
-    parser = argparse.ArgumentParser(parents=[outputparser], description='dumpling client for managing core files and interacting with the dumpling service')
+    sharedparser.add_argument('--logpath', type=str, help='the path to a log file for appending message output')
+
+    sharedparser.add_argument('--url', type=str, help='url of the dumpling service for the connected client')
+
+    sharedparser.add_argument('--configpath', type=str, default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dumpling.config.json'), help='path to the saved dumpling client configuration file')
+
+    parser = argparse.ArgumentParser(parents=[sharedparser], description='dumpling client for managing core files and interacting with the dumpling service')
     
     subparsers = parser.add_subparsers(title='command', dest='command')
     
-    upload_parser = subparsers.add_parser('upload', parents=[outputparser], help='command used for uploading dumps and files to the dumpling service')
+    config_parser = subparsers.add_parser('config', parents=[sharedparser], help='command used for updating saved dumpling client configuration')                               
+    
+    config_parser.add_argument('action', choices=['dump', 'save', 'clear'], help='dumps the contents of the dumpling client configuration to the console')     
+
+    upload_parser = subparsers.add_parser('upload', parents=[sharedparser], help='command used for uploading dumps and files to the dumpling service')
 
     upload_parser.add_argument('--dumppath', type=str, help='path to the dumpfile to be uploaded')
                                         
@@ -519,7 +604,7 @@ if __name__ == '__main__':
                                          
     upload_parser.add_argument('--propfile', type=argparse.FileType('r'), help='path to a file containing a json serialized dictionary of property value paires')
 
-    download_parser = subparsers.add_parser('download', parents=[outputparser], help='command used for downloading dumps and files from the dumpling service')    
+    download_parser = subparsers.add_parser('download', parents=[sharedparser], help='command used for downloading dumps and files from the dumpling service')    
     
     download_idtype = download_parser.add_mutually_exclusive_group(required=True)                                                                                             
     
@@ -533,7 +618,7 @@ if __name__ == '__main__':
 
     download_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')    
     
-    update_parser = subparsers.add_parser('update', parents=[outputparser], help='command used for updating dump properties and associated files')
+    update_parser = subparsers.add_parser('update', parents=[sharedparser], help='command used for updating dump properties and associated files')
                                                                                                             
     update_parser.add_argument('--dumpid', type=str, help='the dumpling id the specified updates are to be associated with')
     
@@ -545,15 +630,20 @@ if __name__ == '__main__':
     
 
 
-    args = parser.parse_args()
+    parsed_args = parser.parse_args()
+
+    config = DumplingConfig.Load(parsed_args.configpath) or DumplingConfig({ })
+    config.Merge(parsed_args.__dict__)
+
     
-    Output.s_verbose = args.verbose
-    Output.s_squelch = args.squelch
-    Output.s_logPath = args.logpath
+    Output.s_verbose = config.verbose
+    Output.s_squelch = config.squelch
+    Output.s_logPath = config.logpath
+    Output.s_noprompt = config.noprompt
 
     DumplingService.s_inst = DumplingService('https://dumpling-dev.azurewebsites.net/')
     filequeue = FileTransferManager(DumplingService.s_inst)
-    cmdProcesser = CommandProcesser(args, filequeue, DumplingService.s_inst)
+    cmdProcesser = CommandProcesser(config, filequeue, DumplingService.s_inst)
     cmdProcesser.Process()
 
     Output.Message('total elapsed time %s'%(datetime.datetime.now() - starttime))
