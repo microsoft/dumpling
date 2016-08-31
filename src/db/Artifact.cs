@@ -39,6 +39,10 @@ namespace dumpling.db
         [StringLength(32)]
         public string Format { get; set; }
 
+        public long Size { get; set; }
+
+        public long CompressedSize { get; set; }
+
         [DataMember]
         public DateTime UploadTime { get; set; }
 

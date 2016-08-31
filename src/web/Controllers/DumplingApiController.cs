@@ -478,6 +478,8 @@ namespace dumpling.web.Controllers
                 Hash = uploader.Hash,
                 Format = uploader.Format,
                 FileName = uploader.FileName,
+                Size = uploader.Decompressed.Length,
+                CompressedSize = uploader.Compressed.Length,
                 UploadTime = DateTime.UtcNow
             };
 
