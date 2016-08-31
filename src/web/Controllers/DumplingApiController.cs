@@ -29,12 +29,11 @@ namespace dumpling.web.Controllers
     public class DumplingApiController : ApiController
     {
         private const int BUFF_SIZE = 1024 * 4;
-        
+
         [Route("api/client/{*filename}")]
         [HttpGet]
         public HttpResponseMessage GetClientTools(string filename)
         {
-
             string path = HttpContext.Current.Server.MapPath("~/Content/client/" + filename);
 
             HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK);
@@ -43,7 +42,17 @@ namespace dumpling.web.Controllers
             result.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
             result.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment") { FileName = filename };
             return result;
+        }
 
+        [Route("api/client/debugging")]
+        [HttpGet]
+        public async Task<HttpResponseMessage> GetDebugToolsAsync(CancellationToken cancelToken, [FromUri] string os = null, [FromUri] string distro = null, [FromUri] string arch = null)
+        {
+            var blobName = string.Join("/", new string[] { os, distro, arch, "dbg.zip" }.Where(s => !string.IsNullOrEmpty(s)));
+
+            var blob = await DumplingStorageClient.SupportContainer.GetBlobReferenceFromServerAsync(blobName, cancelToken);
+
+            return await GetBlobRedirectAsync(blob, cancelToken);
         }
 
         [Route("api/dumplings/{dumplingId}/manifest")]
@@ -368,9 +377,21 @@ namespace dumpling.web.Controllers
                 return Request.CreateResponse(HttpStatusCode.NotFound);
             }
 
-            var stream = new MemoryStream();
+            var blob = await DumplingStorageClient.BlobClient.GetBlobReferenceFromServerAsync(new Uri(artifact.Url), cancelToken);
 
-            var blob = DumplingStorageClient.BlobClient.GetBlobReferenceFromServer(new Uri(artifact.Url));
+            var httpResponse = await GetBlobRedirectAsync(blob, cancelToken);
+
+            httpResponse.Headers.Add("dumpling-filename", artifact.FileName);
+
+            return httpResponse;
+        }
+
+        private async Task<HttpResponseMessage> GetBlobRedirectAsync(ICloudBlob blob, CancellationToken cancelToken)
+        {
+            if(!await blob.ExistsAsync(cancelToken))
+            {
+                return Request.CreateResponse(HttpStatusCode.NotFound);
+            }
 
             var sasConstraints = new SharedAccessBlobPolicy()
             {
@@ -381,12 +402,10 @@ namespace dumpling.web.Controllers
 
             var blobToken = blob.GetSharedAccessSignature(sasConstraints);
 
-            var tempAccessUrl = artifact.Url + blobToken;
+            var tempAccessUrl = blob.Uri.AbsoluteUri + blobToken;
 
             var httpResponse = await ((IHttpActionResult)this.Redirect(tempAccessUrl)).ExecuteAsync(cancelToken);
-
-            httpResponse.Headers.Add("dumpling-filename", artifact.FileName);
-
+            
             return httpResponse;
         }
 
