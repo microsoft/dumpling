@@ -24,6 +24,7 @@ import threading
 import multiprocessing
 import datetime
 import copy
+import stat
 
 def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
@@ -129,6 +130,42 @@ class DumplingService:
     def __init__(self, baseurl):
         self._dumplingUri = baseurl;
 
+    def DownloadDebugger(self, outputdir):
+        url = self._dumplingUri + 'api/client/tools/debug?'
+                               
+        osStr = platform.system().lower()
+
+        qargs = { 'os': osStr }
+
+        if osStr == 'linux':
+            qargs['distro'] = platform.dist()[0].lower()
+
+        url = url + urllib.urlencode(qargs)
+
+        Output.Message('downloading debug tooling for client %s'%(str(qargs)))
+                                                               
+        Output.Diagnostic('   url: %s'%(url))
+               
+        response = requests.get(url);
+                  
+        response.raise_for_status()
+        
+        Output.Diagnostic('   response: %s'%(response))
+
+        Output.Diagnostic('   headers: %s'%(response.headers))
+
+        FileTransforms._ensure_dir(outputdir)
+
+        DumplingService._stream_zip_archive_from_response(response, outputdir)
+        
+        dbgPath = 'cdb.exe' if osStr == 'windows' else 'bin/lldb'
+
+        dbgPath = os.path.join(outputdir, dbgPath)
+        
+        Output.Diagnostic('   dbgpath: %s'%(dbgPath))
+
+        return  dbgPath                                                         
+
     def GetDumplingManfiest(self, dumpid):
         url = self._dumplingUri  + 'api/dumplings/' + dumpid + '/manifest'
 
@@ -143,8 +180,6 @@ class DumplingService:
         Output.Diagnostic('   content: %s'%(_json_format(response.json())))
         
         return response.json()
-    
-
 
     def UploadArtifact(self, dumpid, localpath, hash, file):
         
@@ -235,6 +270,23 @@ class DumplingService:
                           
         Output.Diagnostic('   response: %s'%(response))
 
+    @staticmethod
+    def _stream_zip_archive_from_response(response, unpackdir):
+        #write the zip archive a temp file
+        tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
+        with open(tempPath, 'wb') as fd:
+            for chunk in response.iter_content(1024*8):
+                fd.write(chunk)
+        
+        with open(tempPath, 'rb') as tempFile:
+            zip = zipfile.ZipFile(tempFile)
+            for path in zip.namelist():
+                Output.Diagnostic('extracting   ' + path)
+                zip.extract(path, unpackdir)
+            zip.close()
+        
+        os.remove(tempPath)
+        
     @staticmethod
     def _stream_compressed_file_from_response(response, hash, path):
         #write the compressed blob to a temp file
@@ -413,7 +465,18 @@ class CommandProcesser:
             self.Download()
         elif self._args.command == 'config':
             self.Config()
-                        
+        elif self._args.command == 'install':
+            self.Install()
+                
+    def Install(self):
+        if self._args.debug:    
+            dbgPath = self._dumpSvc.DownloadDebugger(os.path.join(self._args.installpath, 'dbg'))
+            if platform.system().lower() != 'windows':
+                 os.chmod(dbgPath, stat.S_IEXEC)
+            Output.Message('Debugger successfully installed')
+            
+                
+            
     def Config(self):
         if self._args.action == 'dump':
             config = DumplingConfig.Load(self._args.configpath)
@@ -521,8 +584,8 @@ class CommandProcesser:
 
 class DumplingConfig:
 
-    s_unsaved_args = dict([(k, None) for k in ['action', 'command', 'configpath', 'verbose', 'squelch', 'noprompt']]) #{ 'action': None, 'command': None, 'configpath': None, 'squelch': None }
-    s_default_args = { 'url': 'https://dumpling.azurewebsites.net/' }
+    s_unsaved_args = { 'action', 'command', 'configpath', 'verbose', 'squelch', 'noprompt' }
+    s_default_args = { 'url': 'https://dumpling.azurewebsites.net/', 'installpath': os.path.join(os.path.expanduser('~'), '.dumpling') }
     def __init__(self, dictConfig):
         self.__dict__ = copy.copy(DumplingConfig.s_default_args)
 
@@ -628,7 +691,13 @@ if __name__ == '__main__':
 
     update_parser.add_argument('--incpaths', nargs='*', type=str, help='paths to files or directories to be associated with the specified dump')
     
+    install_parser = subparsers.add_parser('install', parents=[sharedparser], help='command used for installing dumpling services and support tooling')
 
+    install_parser.add_argument('--debug', default=None, action='store_true', help='indicates that platform specific debugger should be installed on the client') 
+
+    install_parser.add_argument('--triage', default=None, action='store_true', help='indicates that dumpling triage tooling should be installed on the client') 
+    
+    install_parser.add_argument('--installpath', type=str, help='path to the root directory to install dumpling tooling')
 
     parsed_args = parser.parse_args()
 
@@ -641,7 +710,7 @@ if __name__ == '__main__':
     Output.s_logPath = config.logpath
     Output.s_noprompt = config.noprompt
 
-    DumplingService.s_inst = DumplingService('https://dumpling-dev.azurewebsites.net/')
+    DumplingService.s_inst = DumplingService(config.url)
     filequeue = FileTransferManager(DumplingService.s_inst)
     cmdProcesser = CommandProcesser(config, filequeue, DumplingService.s_inst)
     cmdProcesser.Process()

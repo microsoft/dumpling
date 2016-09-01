@@ -44,15 +44,22 @@ namespace dumpling.web.Controllers
             return result;
         }
 
-        [Route("api/client/debugging")]
+        [Route("api/client/tools/debug")]
         [HttpGet]
-        public async Task<HttpResponseMessage> GetDebugToolsAsync(CancellationToken cancelToken, [FromUri] string os = null, [FromUri] string distro = null, [FromUri] string arch = null)
+        public async Task<HttpResponseMessage> GetDebugToolsAsync([FromUri] string os, CancellationToken cancelToken, [FromUri] string distro = null, [FromUri] string arch = null)
         {
             var blobName = string.Join("/", new string[] { os, distro, arch, "dbg.zip" }.Where(s => !string.IsNullOrEmpty(s)));
 
             var blob = await DumplingStorageClient.SupportContainer.GetBlobReferenceFromServerAsync(blobName, cancelToken);
 
-            return await GetBlobRedirectAsync(blob, cancelToken);
+            var response = await GetBlobRedirectAsync(blob, cancelToken);
+
+            if (response.IsSuccessStatusCode)
+            {
+                response.Headers.Add("dumpling-dbgpath", os == "windows" ? "cdb.exe" : "bin/lldb");
+            }
+
+            return response;
         }
 
         [Route("api/dumplings/{dumplingId}/manifest")]
