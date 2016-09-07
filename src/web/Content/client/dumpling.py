@@ -79,12 +79,11 @@ class Output:
             Output.s_lock.release()
         return result == 'y'
 
-class FileTransforms:
-
+class FileUtils:
 
     @staticmethod
     def _hash_and_compress(inpath, outpath):     
-        FileTransforms._ensure_dir(outpath)
+        FileUtils._ensure_dir(outpath)
         with gzip.open(outpath, 'wb') as fComp:
             with open(inpath, 'rb') as fDecomp:
                 BLOCKSIZE = 1024 * 1024
@@ -100,7 +99,7 @@ class FileTransforms:
 
     @staticmethod
     def _hash_and_decompress(inpath, outpath):
-        FileTransforms._ensure_dir(outpath)
+        FileUtils._ensure_dir(outpath)
         with gzip.open(inpath, 'rb') as fComp:
             with open(outpath, 'wb') as fDecomp:
                 BLOCKSIZE = 1024 * 1024
@@ -142,7 +141,7 @@ class DumplingService:
 
         url = url + urllib.urlencode(qargs)
 
-        Output.Message('downloading debug tooling for client %s'%(str(qargs)))
+        Output.Message('downloading debugger for client %s'%('-'.join(qargs.values())))
                                                                
         Output.Diagnostic('   url: %s'%(url))
                
@@ -154,7 +153,7 @@ class DumplingService:
 
         Output.Diagnostic('   headers: %s'%(response.headers))
 
-        FileTransforms._ensure_dir(outputdir)
+        FileUtils._ensure_dir(outputdir)
 
         DumplingService._stream_zip_archive_from_response(response, outputdir)
         
@@ -295,7 +294,7 @@ class DumplingService:
             for chunk in response.iter_content(1024*8):
                 fd.write(chunk)
         
-        downhash = FileTransforms._hash_and_decompress(tempPath, path)
+        downhash = FileUtils._hash_and_decompress(tempPath, path)
         
         os.remove(tempPath)
 
@@ -401,7 +400,7 @@ class FileTransferManager:
         Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(abspath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
         try:
-            fhash = FileTransforms._hash_and_compress(abspath, tempPath)
+            fhash = FileUtils._hash_and_compress(abspath, tempPath)
             Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
             with open(tempPath, 'rb') as fUpld:
                 self._dumpSvc.UploadArtifact(dumpid, abspath, fhash, fUpld)    
@@ -418,7 +417,7 @@ class FileTransferManager:
         hash = None
         Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(dumppath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
-        hash = FileTransforms._hash_and_compress(dumppath, tempPath)
+        hash = FileUtils._hash_and_compress(dumppath, tempPath)
         Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
         with open(tempPath, 'rb') as fUpld:
             dumpData = self._dumpSvc.UploadDump(dumppath, hash, origin, displayname, fUpld)   
@@ -467,12 +466,16 @@ class CommandProcesser:
             self.Config()
         elif self._args.command == 'install':
             self.Install()
-                
+        elif self._args.command == 'debug':
+            self.Debug()
+     
     def Install(self):
         if self._args.debug:    
             dbgPath = self._dumpSvc.DownloadDebugger(os.path.join(self._args.installpath, 'dbg'))
             if platform.system().lower() != 'windows':
                  os.chmod(dbgPath, stat.S_IEXEC)
+            Output.Message('Adding debugger settings dumpling config')
+            DumplingConfig.SaveSettings(self._args.configpath, { 'dbgpath': dbgPath })
             Output.Message('Debugger successfully installed')
             
                 
@@ -537,30 +540,58 @@ class CommandProcesser:
             
         #create the directory if it doesn't exist
         if not os.path.isdir(dir):
-            os.mkdir(dir)
+            FileUtils._ensure_dir(dir)
         
         if self._args.hash is not None:        
             self._filequeue.QueueFileDownload(self._args.hash, abspath)
+            self._filequeue.WaitForPendingTransfers();
+
         elif self._args.symindex is not None:
             Output.Critical('downloading artifacts from index is not yet supported')
             #self._filequeue.QueueFileIndexDownload(self._args.symindex, abspath)
-        elif self._args.dumpid is not None:
+
+        elif self._args.dumpid is not None:  
             dumpManifest = self._dumpSvc.GetDumplingManfiest(self._args.dumpid)
             
-            dumplingDir = os.path.join(dir, dumpManifest['displayName'])
+            self._download_dump(dumpManifest)
+
+
+    def Debug(self):
+        if self._args.dbgpath is None:
+            Output.Critical('dbgpath must be specified either as an argument or in the dumpling config to use the debug command')
+            return
+        
+        #get the dump manifest                           
+        dumpManifest = self._dumpSvc.GetDumplingManfiest(self._args.dumpid)
+        
+        #if the dump OS is not debuggable on this system error and return
+        if dumpManifest['oS'] != platform.system().lower():
+            Output.Critical('the specified dump can only be debugged on the %s platform'%(dumpManifest['oS']))
+            return
+
+        
+        #donwload the dump
+        dumpManifest = self._download_dump(dumpManifest)
+        
+        #find the dump path from the manifest
+        
+
+    def _download_dump(self, dumpManifest):
+        dumplingDir = os.path.join(dir, dumpManifest['displayName'])
             
-            if not os.path.exists(dumplingDir):
-                os.mkdir(dumplingDir)
+        if not os.path.exists(dumplingDir):
+            FileUtils._ensure_dir(dumplingDir)
 
-            for da in dumpManifest['dumpArtifacts']:
-                if 'hash' in da and 'relativePath' in da:
-                    hash = da['hash']
-                    relPath = da['relativePath']
-                    if hash and relPath:
-                        self._filequeue.QueueFileDownload(hash, os.path.join(dumplingDir, relPath)) 
+        for da in dumpManifest['dumpArtifacts']:
+            if 'hash' in da and 'relativePath' in da:
+                hash = da['hash']
+                relPath = da['relativePath']
+                if hash and relPath:
+                    self._filequeue.QueueFileDownload(hash, os.path.join(dumplingDir, relPath)) 
+        
+        return dumpManifest
 
-        self._filequeue.WaitForPendingTransfers();
-
+        
     @staticmethod
     def _add_client_triage_properties(dictProp):
         dictProp = dictProp or { }
@@ -602,6 +633,13 @@ class DumplingConfig:
                 return DumplingConfig(dict)
         except:
             return None
+
+    @staticmethod
+    def SaveSettings(strpath, dictSettings):
+        config = DumplingConfig.Load(strpath)
+        config.Merge(dictSettings)
+        config.Save(strpath)
+
     
     def Merge(self, dictConfig):
         for key, value in dictConfig.iteritems():
@@ -650,6 +688,10 @@ if __name__ == '__main__':
     config_parser = subparsers.add_parser('config', parents=[sharedparser], help='command used for updating saved dumpling client configuration')                               
     
     config_parser.add_argument('action', choices=['dump', 'save', 'clear'], help='dumps the contents of the dumpling client configuration to the console')     
+              
+    config_parser.add_argument('--dbgpath', type=str, default=None, help='path to debugger to be used by the dumpling client for debugging and triage')
+                                        
+    config_parser.add_argument('--dbgargs', nargs='*', help='arguments to be passed to the debugger. NOTE: use $(dumppath) as a replacement token for the dumpfile to open in the debugger')
 
     upload_parser = subparsers.add_parser('upload', parents=[sharedparser], help='command used for uploading dumps and files to the dumpling service')
 
@@ -699,6 +741,16 @@ if __name__ == '__main__':
     
     install_parser.add_argument('--installpath', type=str, help='path to the root directory to install dumpling tooling')
 
+    debug_parser = subparsers.add_parser('debug', parents=[sharedparser], help='download a dumpling dump and load it into the debugger')   
+    
+    download_idtype.add_argument('--dumpid', type=str, required=True, help='the dumpling id of the dump to download for debugging')   
+    
+    debug_parser.add_argument('--dbgargs', nargs='*', help='arguments to be passed to the debugger. NOTE: use $(dumppath) as a replacement token for the dumpfile to open in the debugger')
+
+    debug_parser.add_argument('--dbgpath', type=str, default=None, help='path to debugger to be used by the dumpling client for debugging and triage')
+                                                 
+    download_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')    
+    
     parsed_args = parser.parse_args()
 
     config = DumplingConfig.Load(parsed_args.configpath) or DumplingConfig({ })

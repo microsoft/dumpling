@@ -35,7 +35,13 @@ namespace dumpling.db
         public string DisplayName { get; set; }
 
         [DataMember]
-        public string Origin { get; set; }
+        [StringLength(128)]
+        public string User { get; set; }
+
+        [DataMember]
+        [StringLength(32)]
+        [Required]
+        public string Os { get; set; }
         
         public string FailureHash { get; set; }
 

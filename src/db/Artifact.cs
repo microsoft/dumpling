@@ -36,6 +36,7 @@ namespace dumpling.db
 
         [Required]
         [DataMember]
+        [StringLength(32)]
         public string Format { get; set; }
 
         [DataMember]

@@ -48,7 +48,7 @@
   <ItemGroup>
     <Reference Include="FileIndexers, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\packages\Microsoft.SymStore.Indexers.1.0.8\lib\net46\FileIndexers.dll</HintPath>
+      <HintPath>..\..\packages\Microsoft.SymStore.Indexers.1.0.9\lib\net46\FileIndexers.dll</HintPath>
       <Private>True</Private>
     </Reference>
     <Reference Include="Microsoft.Azure.KeyVault.Core">
@@ -302,7 +302,7 @@
     <VisualStudio>
       <FlavorProperties GUID="{349c5851-65df-11da-9384-00065b846f21}">
         <WebProjectProperties>
-          <UseIIS>True</UseIIS>
+          <UseIIS>False</UseIIS>
           <AutoAssignPort>True</AutoAssignPort>
           <DevelopmentServerPort>2399</DevelopmentServerPort>
           <DevelopmentServerVPath>/</DevelopmentServerVPath>
