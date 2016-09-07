@@ -569,7 +569,6 @@ class CommandProcesser:
             Output.Critical('the specified dump can only be debugged on the %s platform'%(dumpManifest['oS']))
             return
 
-        
         #donwload the dump
         dumpManifest = self._download_dump(dumpManifest)
         
