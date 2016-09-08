@@ -232,7 +232,7 @@
                                 <tr class="dumprow">
                                     <td class="dumpid" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)"><p>@(dump.DumpId)</p></td>
                                     <td class="dumpname" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">@(dump.DisplayName)</td>
-                                    <td class="dumpusername" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">@(dump.Origin)</td>
+                                    <td class="dumpusername" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">@(dump.User)</td>
                                     <td class="dumpuploaded" onmouseup="onMouseUp_toggleTable(this)" id="@(dump.DumpId)">
                                         <script type="text/javascript"> var strDate = new String('@(dump.DumpTime.ToString() + " UTC")'); var localTime = new Date(strDate); document.write(localTime.toLocaleString()); </script>
                                     </td>

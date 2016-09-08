@@ -29,6 +29,9 @@ import stat
 def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
 
+def _json_format_tofile(obj, file):
+    json.dump(obj, sort_keys=True, indent=4, separators=(',', ': '))
+
 class Output:
     s_squelch=False
     s_verbose=False
@@ -249,11 +252,11 @@ class DumplingService:
         Output.Diagnostic('   url: %s'%(url))
 
         response = requests.post(url, data=file)
-                                                 
+                                     
+        Output.Diagnostic('   response: %s'%(response))
+                    
         response.raise_for_status()
 
-        Output.Diagnostic('   response: %s'%(response))
-        
         return response.json()
     
     def UpdateDumpProperties(self, dumplingid, dictProps):
@@ -515,6 +518,13 @@ class CommandProcesser:
 
             dumpid = self._filequeue.UploadDump(self._args.dumppath, self._args.incpaths, self._args.user, self._args.displayname)
             
+            if self._args.properties is not None:
+                propDict = { }
+                for kvp in self._args.properties:
+                    if kvp is not None:
+                        CommandProcesser._add_key_if_not_exists(dictProp,kvp[0],kvp[1])
+                self._args.properties = propDict
+            
             if not self._args.suppresstriage:
                 self._args.properties = CommandProcesser._add_client_triage_properties(self._args.properties)
 
@@ -570,7 +580,7 @@ class CommandProcesser:
             return
 
         #donwload the dump
-        dumpManifest = self._download_dump(dumpManifest)
+        self._download_dump(dumpManifest)
         
         #find the dump path from the manifest
         
@@ -581,6 +591,7 @@ class CommandProcesser:
         if not os.path.exists(dumplingDir):
             FileUtils._ensure_dir(dumplingDir)
 
+        #download all the artifacts for the dump
         for da in dumpManifest['dumpArtifacts']:
             if 'hash' in da and 'relativePath' in da:
                 hash = da['hash']
@@ -588,6 +599,12 @@ class CommandProcesser:
                 if hash and relPath:
                     self._filequeue.QueueFileDownload(hash, os.path.join(dumplingDir, relPath)) 
         
+        #save the manifest at the root 
+        manifestPath = os.path.join(dumplingDir, 'dumpling.manifest.json')
+
+        with open(manifestPath, 'w') as manFile:
+            _json_format_tofile(dumpManifest, manFile)
+ 
         return dumpManifest
 
         
@@ -742,13 +759,13 @@ if __name__ == '__main__':
 
     debug_parser = subparsers.add_parser('debug', parents=[sharedparser], help='download a dumpling dump and load it into the debugger')   
     
-    download_idtype.add_argument('--dumpid', type=str, required=True, help='the dumpling id of the dump to download for debugging')   
+    debug_parser.add_argument('--dumpid', type=str, required=True, help='the dumpling id of the dump to download for debugging')   
     
     debug_parser.add_argument('--dbgargs', nargs='*', help='arguments to be passed to the debugger. NOTE: use $(dumppath) as a replacement token for the dumpfile to open in the debugger')
 
     debug_parser.add_argument('--dbgpath', type=str, default=None, help='path to debugger to be used by the dumpling client for debugging and triage')
                                                  
-    download_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')    
+    debug_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')    
     
     parsed_args = parser.parse_args()
 

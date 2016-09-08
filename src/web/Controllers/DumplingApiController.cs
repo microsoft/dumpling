@@ -145,7 +145,7 @@ namespace dumpling.web.Controllers
 
                 var clientFilesNeeded = new List<string>();
 
-                dumpling = new Dump() { DumpId = hash, User = origin, DisplayName = displayName, DumpTime = DateTime.UtcNow };
+                dumpling = new Dump() { DumpId = hash, User = origin, DisplayName = displayName, DumpTime = DateTime.UtcNow, Os = OS.Unknown };
 
                 dumplingDb.Dumps.Add(dumpling);
 
