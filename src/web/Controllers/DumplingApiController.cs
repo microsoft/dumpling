@@ -2,6 +2,8 @@
 using dumpling.web.Storage;
 using FileFormats;
 using FileFormats.ELF;
+using FileFormats.MachO;
+using FileFormats.Minidump;
 using FileFormats.PDB;
 using FileFormats.PE;
 using Microsoft.WindowsAzure.Storage.Blob;
@@ -53,11 +55,7 @@ namespace dumpling.web.Controllers
             var blob = await DumplingStorageClient.SupportContainer.GetBlobReferenceFromServerAsync(blobName, cancelToken);
 
             var response = await GetBlobRedirectAsync(blob, cancelToken);
-
-            if (response.IsSuccessStatusCode)
-            {
-                response.Headers.Add("dumpling-dbgpath", os == "windows" ? "cdb.exe" : "bin/lldb");
-            }
+            
 
             return response;
         }
@@ -147,7 +145,7 @@ namespace dumpling.web.Controllers
 
                 var clientFilesNeeded = new List<string>();
 
-                dumpling = new Dump() { DumpId = hash, Origin = origin, DisplayName = displayName, DumpTime = DateTime.UtcNow };
+                dumpling = new Dump() { DumpId = hash, User = origin, DisplayName = displayName, DumpTime = DateTime.UtcNow, Os = OS.Unknown };
 
                 dumplingDb.Dumps.Add(dumpling);
 
@@ -480,6 +478,8 @@ namespace dumpling.web.Controllers
                 Hash = uploader.Hash,
                 Format = uploader.Format,
                 FileName = uploader.FileName,
+                Size = uploader.Decompressed.Length,
+                CompressedSize = uploader.Compressed.Length,
                 UploadTime = DateTime.UtcNow
             };
 
@@ -556,6 +556,8 @@ namespace dumpling.web.Controllers
             {
             }
 
+            public string DumpOS { get; private set; }
+
             public IList<DumpArtifact> GetLoadedModules(string dumpId)
             {
                 switch (this.Format)
@@ -571,10 +573,26 @@ namespace dumpling.web.Controllers
             {
                 if (IsELFCore())
                 {
-                    Format = "elfcore";
+                    Format = ArtifactFormat.ElfCore;
+                    DumpOS = OS.Linux;
+                }
+                else if (IsMinidump())
+                {
+                    Format = ArtifactFormat.Minidump;
+                    DumpOS = OS.Windows;
+                }
+                else if (IsMachCore())
+                {
+                    Format = ArtifactFormat.MachCore;
+                    DumpOS = OS.Mac;
+                }
+                else
+                {
+                    Format = ArtifactFormat.Unknown;
+                    DumpOS = OS.Unknown;
                 }
                 
-                Index = BuildIndexFromModuleUUID(Hash, SHA1_INDEXSTYLE_ID, FileName);
+                Index = BuildIndexFromModuleUUID(Hash, IndexPrefix.SHA1, FileName);
             }
 
             private bool IsELFCore()
@@ -589,6 +607,32 @@ namespace dumpling.web.Controllers
                     _fileFormatReader = coreFile;
 
                     return true;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            private bool IsMinidump()
+            {
+                try
+                {
+                    return Minidump.IsValidMinidump(new StreamAddressSpace(Decompressed));
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            private bool IsMachCore()
+            {
+                try
+                {
+                    var machCore = new MachCore(new StreamAddressSpace(Decompressed));
+
+                    return machCore.IsValidCoreFile;
                 }
                 catch
                 {
@@ -619,7 +663,7 @@ namespace dumpling.web.Controllers
 
                             if (buildId != null)
                             {
-                                index = BuildIndexFromModuleUUID(buildId, ELF_INDEXSTYLE_ID, Path.GetFileName(image.Path));
+                                index = BuildIndexFromModuleUUID(buildId, IndexPrefix.Elf, Path.GetFileName(image.Path));
                             }
                         }
                         catch { }
@@ -634,9 +678,9 @@ namespace dumpling.web.Controllers
                             //currently the dac index and the sos index are not imbedded in libcoreclr.so 
                             //this should eventually be the case, but for now set the indexes using the buildid from libcoreclr.so
                             //and we will manually add these indexes to the atifact store
-                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libmscordaccore.so"), Index = BuildIndexFromModuleUUID(buildId, ELF_INDEXSTYLE_ID, "libmscordaccore.so"), DebugCritical = true });
+                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libmscordaccore.so"), Index = BuildIndexFromModuleUUID(buildId, IndexPrefix.Elf, "libmscordaccore.so"), DebugCritical = true });
 
-                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libsos.so"), Index = BuildIndexFromModuleUUID(buildId, ELF_INDEXSTYLE_ID, "libsos.so"), DebugCritical = true });
+                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libsos.so"), Index = BuildIndexFromModuleUUID(buildId, IndexPrefix.Elf, "libsos.so"), DebugCritical = true });
                         }
                     }
 
@@ -713,28 +757,29 @@ namespace dumpling.web.Controllers
             protected virtual void ComputeFormatAndIndex()
             {
                 string index;
+
                 if(TryGetElfIndex(Decompressed, FileName, out index))
                 {
-                    Format = "elf";
+                    Format = ArtifactFormat.Elf;
                 }
                 else if(TryGetPEIndex(Decompressed, FileName, out index))
                 {
-                    Format = "pe";
+                    Format = ArtifactFormat.PE;
+                }
+                else if (TryGetPDBIndex(Decompressed, FileName, out index))
+                {
+                    Format = ArtifactFormat.PDB;
                 }
                 else
                 {
-                    Format = "unknown";
+                    Format = ArtifactFormat.Unknown;
 
-                    index = BuildIndexFromModuleUUID(Hash, SHA1_INDEXSTYLE_ID, FileName);
+                    index = BuildIndexFromModuleUUID(Hash, IndexPrefix.SHA1, FileName);
                 }
 
                 Index = index;
             }
-
-            protected const string SHA1_INDEXSTYLE_ID = "sha1-";
-            protected const string ELF_INDEXSTYLE_ID = "elf-buildid-";
-            protected const string PE_INDEXSTYLE_ID = "";
-            protected const string PDB_INDEXSTYLE_ID = "";
+            
 
             protected static string BuildIndexFromModuleUUID(byte[] uuid, string indexStyleId, string filename)
             {
@@ -782,7 +827,7 @@ namespace dumpling.web.Controllers
                         return false;
                     }
 
-                    index = BuildIndexFromModuleUUID(elf.BuildID, ELF_INDEXSTYLE_ID, filename);
+                    index = BuildIndexFromModuleUUID(elf.BuildID, IndexPrefix.Elf, filename);
 
                     return true;
                 }
@@ -813,7 +858,7 @@ namespace dumpling.web.Controllers
 
                     string key = reader.Timestamp.ToString("x").ToLowerInvariant() + reader.SizeOfImage.ToString("x").ToLowerInvariant();
 
-                    index = BuildIndexFromModuleUUID(key, PE_INDEXSTYLE_ID, filename);
+                    index = BuildIndexFromModuleUUID(key, IndexPrefix.PE, filename);
 
                     return true;
                 }
@@ -839,7 +884,7 @@ namespace dumpling.web.Controllers
                     }
     
                     string key = pdb.Signature.ToString().Replace("-", "").ToLowerInvariant() + pdb.Age.ToString("x").ToLowerInvariant();
-                    index = BuildIndexFromModuleUUID(key, PDB_INDEXSTYLE_ID, filename);
+                    index = BuildIndexFromModuleUUID(key, IndexPrefix.PDB, filename);
                     return true;
                 }
                 catch (InputParsingException)
