@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 
 # Licensed to the .NET Foundation under one or more agreements.
 # The .NET Foundation licenses this file to you under the MIT license.
@@ -30,7 +30,7 @@ def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
 
 def _json_format_tofile(obj, file):
-    json.dump(obj, sort_keys=True, indent=4, separators=(',', ': '))
+    json.dump(obj, file, sort_keys=True, indent=4, separators=(',', ': '))
 
 class Output:
     s_squelch=False
@@ -86,7 +86,7 @@ class FileUtils:
 
     @staticmethod
     def _hash_and_compress(inpath, outpath):     
-        FileUtils._ensure_dir(outpath)
+        FileUtils._ensure_parent_dir(outpath)
         with gzip.open(outpath, 'wb') as fComp:
             with open(inpath, 'rb') as fDecomp:
                 BLOCKSIZE = 1024 * 1024
@@ -102,7 +102,7 @@ class FileUtils:
 
     @staticmethod
     def _hash_and_decompress(inpath, outpath):
-        FileUtils._ensure_dir(outpath)
+        FileUtils._ensure_parent_dir(outpath)
         with gzip.open(inpath, 'rb') as fComp:
             with open(outpath, 'wb') as fDecomp:
                 BLOCKSIZE = 1024 * 1024
@@ -117,12 +117,15 @@ class FileUtils:
                 return hash.hexdigest() 
 
     @staticmethod    
+    def _ensure_parent_dir(path):
+        FileUtils._ensure_dir(os.path.dirname(path))
+       
+    @staticmethod    
     def _ensure_dir(path):
-        dir = os.path.dirname(path)    
         #create the directory if it doesn't exist
-        if not os.path.isdir(os.path.abspath(dir)):
+        if not os.path.isdir(os.path.abspath(path)):
             try:
-                os.makedirs(os.path.abspath(dir))
+                os.makedirs(os.path.abspath(path))
             except:
                 return
 
@@ -417,7 +420,8 @@ class FileTransferManager:
 
     def UploadDump(self, dumppath, incpaths, origin, displayname):
         #
-        hash = None
+        hash = None                                                      
+        Output.Message('processing dump file %s'%(dumppath))
         Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(dumppath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
         hash = FileUtils._hash_and_compress(dumppath, tempPath)
@@ -504,6 +508,9 @@ class CommandProcesser:
             
 
     def Upload(self):
+        
+        dumpid = None
+        
         #if nothing was specified to upload
         if self._args.dumppath is None and (self._args.incpaths is None or len(self._args.incpaths) == 0):
             Output.Critical('No artifacts or dumps were specified to upload, either --dumppath or --incpaths is required to upload')
@@ -536,7 +543,9 @@ class CommandProcesser:
             self._filequeue.UploadFiles(dumpid, args.incpaths)
 
         self._filequeue.WaitForPendingTransfers();
-
+        
+        Output.Message('dumplingid:  %s'%(dumpid))
+        Output.Critical('%sapi/dumplings/archived/%s'%(self._args.url, dumpid ))
         
     def Download(self):
         
@@ -563,7 +572,7 @@ class CommandProcesser:
         elif self._args.dumpid is not None:  
             dumpManifest = self._dumpSvc.GetDumplingManfiest(self._args.dumpid)
             
-            self._download_dump(dumpManifest)
+            self._download_dump(dir, dumpManifest)
 
 
     def Debug(self):
@@ -580,12 +589,12 @@ class CommandProcesser:
             return
 
         #donwload the dump
-        self._download_dump(dumpManifest)
+        self._download_dump(self._args.downdir, dumpManifest)
         
         #find the dump path from the manifest
         
 
-    def _download_dump(self, dumpManifest):
+    def _download_dump(self, dir, dumpManifest):
         dumplingDir = os.path.join(dir, dumpManifest['displayName'])
             
         if not os.path.exists(dumplingDir):
@@ -600,13 +609,12 @@ class CommandProcesser:
                     self._filequeue.QueueFileDownload(hash, os.path.join(dumplingDir, relPath)) 
         
         #save the manifest at the root 
-        manifestPath = os.path.join(dumplingDir, 'dumpling.manifest.json')
+        manifestPath = os.path.join(dumplingDir, 'manifest.json')
 
         with open(manifestPath, 'w') as manFile:
             _json_format_tofile(dumpManifest, manFile)
  
-        return dumpManifest
-
+        self._filequeue.WaitForPendingTransfers();
         
     @staticmethod
     def _add_client_triage_properties(dictProp):
