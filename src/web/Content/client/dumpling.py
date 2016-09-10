@@ -26,6 +26,7 @@ import datetime
 import copy
 import stat
 import subprocess
+import sys
 
 def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
@@ -90,7 +91,7 @@ class FileUtils:
         FileUtils._ensure_parent_dir(outpath)
         with gzip.open(outpath, 'wb') as fComp:
             with open(inpath, 'rb') as fDecomp:
-                BLOCKSIZE = 1024 * 1024
+                BLOCKSIZE = 1024 * 8
                 compsize = 0
                 hash = hashlib.sha1()
                 buf = fDecomp.read(BLOCKSIZE)
@@ -106,7 +107,7 @@ class FileUtils:
         FileUtils._ensure_parent_dir(outpath)
         with gzip.open(inpath, 'rb') as fComp:
             with open(outpath, 'wb') as fDecomp:
-                BLOCKSIZE = 1024 * 1024
+                BLOCKSIZE = 1024 * 8
                 compsize = 0
                 hash = hashlib.sha1()
                 buf = fComp.read(BLOCKSIZE)
@@ -541,7 +542,7 @@ class CommandProcesser:
             
         #if there are included paths upload them
         if not (self._args.incpaths is None or len(self._args.incpaths) == 0):
-            self._filequeue.UploadFiles(dumpid, args.incpaths)
+            self._filequeue.UploadFiles(dumpid, self._args.incpaths)
 
         self._filequeue.WaitForPendingTransfers();
         
@@ -563,7 +564,7 @@ class CommandProcesser:
             FileUtils._ensure_dir(dir)
         
         if self._args.hash is not None:        
-            self._filequeue.QueueFileDownload(self._args.hash, abspath)
+            self._filequeue.QueueFileDownload(self._args.hash, path)
             self._filequeue.WaitForPendingTransfers();
 
         elif self._args.symindex is not None:
@@ -766,8 +767,8 @@ def _parse_key_value_pair(argStr):
     if len(kvp) != 2:
         raise argparse.ArgumentError('the specified property key value pair is invalid. ' + argstr)
 
-if __name__ == '__main__':
-
+def main(argv):
+    
     starttime = datetime.datetime.now();
 
     sharedparser = argparse.ArgumentParser(add_help=False)
@@ -854,7 +855,7 @@ if __name__ == '__main__':
                                                  
     debug_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')    
     
-    parsed_args = parser.parse_args()
+    parsed_args = parser.parse_args(argv)
 
     config = DumplingConfig.Load(parsed_args.configpath) or DumplingConfig({ })
     config.Merge(parsed_args.__dict__)
@@ -871,6 +872,9 @@ if __name__ == '__main__':
     cmdProcesser.Process()
 
     Output.Message('total elapsed time %s'%(datetime.datetime.now() - starttime))
+
+if __name__ == '__main__':
+    main(sys.argv)
 
 
 

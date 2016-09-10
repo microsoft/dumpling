@@ -254,3 +254,4 @@ Session.vim
 .netrwhist
 *~
 
+*.pyc

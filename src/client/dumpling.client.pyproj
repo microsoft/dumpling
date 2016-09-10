@@ -5,7 +5,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{0133d1da-7e6e-4450-8d0c-7d6d62103bc8}</ProjectGuid>
     <ProjectHome>..\web\Content\client\</ProjectHome>
-    <StartupFile>analysis.py</StartupFile>
+    <StartupFile>dumpling.test.py</StartupFile>
     <SearchPath />
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
@@ -27,6 +27,9 @@
   <ItemGroup>
     <Compile Include="analysis.py" />
     <Compile Include="dumpling.py" />
+    <Compile Include="dumpling.test.py">
+      <SubType>Code</SubType>
+    </Compile>
   </ItemGroup>
   <Import Project="$(PtvsTargetsFile)" Condition="Exists($(PtvsTargetsFile))" />
   <Import Project="$(MSBuildToolsPath)\Microsoft.Common.targets" Condition="!Exists($(PtvsTargetsFile))" />
