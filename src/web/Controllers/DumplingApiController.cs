@@ -683,9 +683,9 @@ namespace dumpling.web.Controllers
                             //currently the dac index and the sos index are not imbedded in libcoreclr.so 
                             //this should eventually be the case, but for now set the indexes using the buildid from libcoreclr.so
                             //and we will manually add these indexes to the atifact store
-                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libmscordaccore.so"), Index = BuildIndexFromModuleUUID(uuid, IndexPrefix.Elf, "libmscordaccore.so"), DebugCritical = true });
+                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libmscordaccore.so").Replace('\\', '/'), Index = BuildIndexFromModuleUUID(uuid, IndexPrefix.Elf, "libmscordaccore.so"), DebugCritical = true });
 
-                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libsos.so"), Index = BuildIndexFromModuleUUID(uuid, IndexPrefix.Elf, "libsos.so"), DebugCritical = true });
+                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libsos.so").Replace('\\', '/'), Index = BuildIndexFromModuleUUID(uuid, IndexPrefix.Elf, "libsos.so"), DebugCritical = true });
                         }
                     }
 

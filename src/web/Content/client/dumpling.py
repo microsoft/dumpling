@@ -25,6 +25,7 @@ import multiprocessing
 import datetime
 import copy
 import stat
+import subprocess
 
 def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
@@ -584,15 +585,73 @@ class CommandProcesser:
         dumpManifest = self._dumpSvc.GetDumplingManfiest(self._args.dumpid)
         
         #if the dump OS is not debuggable on this system error and return
-        if dumpManifest['oS'] != platform.system().lower():
+        if dumpManifest['os'] != platform.system().lower():
             Output.Critical('the specified dump can only be debugged on the %s platform'%(dumpManifest['oS']))
             return
-
-        #donwload the dump
-        self._download_dump(self._args.downdir, dumpManifest)
         
         #find the dump path from the manifest
+        dumppath = next((dumpart['relativePath'] for dumpart in dumpManifest['dumpArtifacts'] if dumpart['hash'] == dumpart['dumpId']), None)
+
+        Output.Diagnostic('dumppath: %s'%(dumppath))
+
+        #if there is no dump file found in the manifest error and return 
+        if dumppath is None:
+            Output.Critical('the specified dump does not have a dump file associated with it')
+            return
+           
+        #donwload the dump
+        dumplingDir = self._download_dump(self._args.downdir, dumpManifest)
+           
+        fulldumppath = os.path.join(dumplingDir, dumppath)      
+            
+        Output.Diagnostic('Dump Path:  %s'%(fulldumppath))
+                                                                                         
+        if platform.system().lower() == 'linux':   
+                
+            execImage = next((dumpart['relativePath'] for dumpart in dumpManifest['dumpArtifacts'] if dumpart['debugCritical']), None)
+            
+            execImage = None if not execImage else os.path.join(dumplingDir, execImage)
+
+            #if the executable image is not available error and return
+            if not execImage or not os.path.isfile(execImage):
+                Output.Critical('the executable image for specified core dump is not available')
+                return
+
+                                                                         
+            #self._args.dbgargs.extend([ '-o', 'platform select --sysroot "%s" remote-linux'%(dumplingDir) ])  
+
+                                                           
+                                                                                                                                        
+            self._args.dbgargs.extend([ '-o', 'target create -c %s %s'%(fulldumppath, execImage) ])       
+            self._args.dbgargs.extend([ '-o', 'target modules search-paths add /lib64/ %s/lib64/'%(dumplingDir) ])  
+            self._args.dbgargs.extend([ '-o', 'target modules search-paths add /home/ %s/home/'%(dumplingDir) ])  
+
+            
+            #for dumpart in dumpManifest['dumpArtifacts']:
+            #    if dumpart['debugCritical'] and not dumpart['relativePath'].endswith('libsos.so') and not dumpart['relativePath'].endswith('libmscordaccore.so'):
+            #        artpath = os.path.join(dumplingDir, dumpart['relativePath'])
+                    
+            #        symcmd = 'target symbols add -s "%s"'%(artpath)
+                    
+            #        self._args.dbgargs.extend([ '-o', symcmd ]) 
+
+            sosPath = os.path.join(os.path.dirname(self._args.dbgpath), 'libsosplugin.so')
+
+            self._args.dbgargs.extend([ '-o', 'plugin load %s'%(sosPath) ])   
+
+
+        Output.Diagnostic('Debugger path:  %s'%(self._args.dbgpath))
+                                
+        Output.Diagnostic('Debugger args:  %s'%(self._args.dbgargs))
         
+        popdir = os.getcwd()
+
+        os.chdir(os.path.dirname(fulldumppath))
+        
+        #load the dump in the debugger   
+        CommandProcesser._load_dump_in_debugger(self._args.dbgpath, self._args.dbgargs)
+        
+        os.chdir(popdir)
 
     def _download_dump(self, dir, dumpManifest):
         dumplingDir = os.path.join(dir, dumpManifest['displayName'])
@@ -615,7 +674,22 @@ class CommandProcesser:
             _json_format_tofile(dumpManifest, manFile)
  
         self._filequeue.WaitForPendingTransfers();
-        
+
+        return dumplingDir
+    
+    @staticmethod
+    def _load_dump_in_debugger(debuggerPath, debuggerArgs):
+
+        procArgs = [ debuggerPath ]
+
+        procArgs.extend(debuggerArgs)
+                                                              
+        Output.Diagnostic('Debugger command:  %s'%(' '.join(procArgs)))
+
+        dbgproc = subprocess.Popen(procArgs)
+
+        dbgproc.wait()
+    
     @staticmethod
     def _add_client_triage_properties(dictProp):
         dictProp = dictProp or { }
@@ -637,10 +711,16 @@ class CommandProcesser:
         if not key in dictProp:
             dictProp[key] = val
 
+def _get_default_dbgargs():
+    if platform.system().lower() == 'windows':
+        return [ '-z', '$(dumppath)' ]
+    else:
+        return [  ]
+
 class DumplingConfig:
 
     s_unsaved_args = { 'action', 'command', 'configpath', 'verbose', 'squelch', 'noprompt' }
-    s_default_args = { 'url': 'https://dumpling.azurewebsites.net/', 'installpath': os.path.join(os.path.expanduser('~'), '.dumpling') }
+    s_default_args = { 'url': 'https://dumpling.azurewebsites.net/', 'installpath': os.path.join(os.path.expanduser('~'), '.dumpling'), 'dbgargs': _get_default_dbgargs() }
     def __init__(self, dictConfig):
         self.__dict__ = copy.copy(DumplingConfig.s_default_args)
 
@@ -664,7 +744,6 @@ class DumplingConfig:
         config.Merge(dictSettings)
         config.Save(strpath)
 
-    
     def Merge(self, dictConfig):
         for key, value in dictConfig.iteritems():
             if value or key not in self.__dict__:
