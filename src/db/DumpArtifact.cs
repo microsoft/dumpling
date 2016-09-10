@@ -45,6 +45,7 @@ namespace dumpling.db
         public virtual Dump Dump { get; set; }
         
         [ForeignKey("Hash")]
+        [DataMember]
         public virtual Artifact Artifact { get; set; }
 
 

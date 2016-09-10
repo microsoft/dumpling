@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 
 # Licensed to the .NET Foundation under one or more agreements.
 # The .NET Foundation licenses this file to you under the MIT license.
@@ -25,12 +25,13 @@ import multiprocessing
 import datetime
 import copy
 import stat
+import subprocess
 
 def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
 
 def _json_format_tofile(obj, file):
-    json.dump(obj, sort_keys=True, indent=4, separators=(',', ': '))
+    json.dump(obj, file, sort_keys=True, indent=4, separators=(',', ': '))
 
 class Output:
     s_squelch=False
@@ -86,7 +87,7 @@ class FileUtils:
 
     @staticmethod
     def _hash_and_compress(inpath, outpath):     
-        FileUtils._ensure_dir(outpath)
+        FileUtils._ensure_parent_dir(outpath)
         with gzip.open(outpath, 'wb') as fComp:
             with open(inpath, 'rb') as fDecomp:
                 BLOCKSIZE = 1024 * 1024
@@ -102,7 +103,7 @@ class FileUtils:
 
     @staticmethod
     def _hash_and_decompress(inpath, outpath):
-        FileUtils._ensure_dir(outpath)
+        FileUtils._ensure_parent_dir(outpath)
         with gzip.open(inpath, 'rb') as fComp:
             with open(outpath, 'wb') as fDecomp:
                 BLOCKSIZE = 1024 * 1024
@@ -117,12 +118,15 @@ class FileUtils:
                 return hash.hexdigest() 
 
     @staticmethod    
+    def _ensure_parent_dir(path):
+        FileUtils._ensure_dir(os.path.dirname(path))
+       
+    @staticmethod    
     def _ensure_dir(path):
-        dir = os.path.dirname(path)    
         #create the directory if it doesn't exist
-        if not os.path.isdir(os.path.abspath(dir)):
+        if not os.path.isdir(os.path.abspath(path)):
             try:
-                os.makedirs(os.path.abspath(dir))
+                os.makedirs(os.path.abspath(path))
             except:
                 return
 
@@ -417,7 +421,8 @@ class FileTransferManager:
 
     def UploadDump(self, dumppath, incpaths, origin, displayname):
         #
-        hash = None
+        hash = None                                                      
+        Output.Message('processing dump file %s'%(dumppath))
         Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(dumppath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
         hash = FileUtils._hash_and_compress(dumppath, tempPath)
@@ -504,6 +509,9 @@ class CommandProcesser:
             
 
     def Upload(self):
+        
+        dumpid = None
+        
         #if nothing was specified to upload
         if self._args.dumppath is None and (self._args.incpaths is None or len(self._args.incpaths) == 0):
             Output.Critical('No artifacts or dumps were specified to upload, either --dumppath or --incpaths is required to upload')
@@ -536,7 +544,9 @@ class CommandProcesser:
             self._filequeue.UploadFiles(dumpid, args.incpaths)
 
         self._filequeue.WaitForPendingTransfers();
-
+        
+        Output.Message('dumplingid:  %s'%(dumpid))
+        Output.Critical('%sapi/dumplings/archived/%s'%(self._args.url, dumpid ))
         
     def Download(self):
         
@@ -563,7 +573,7 @@ class CommandProcesser:
         elif self._args.dumpid is not None:  
             dumpManifest = self._dumpSvc.GetDumplingManfiest(self._args.dumpid)
             
-            self._download_dump(dumpManifest)
+            self._download_dump(dir, dumpManifest)
 
 
     def Debug(self):
@@ -575,17 +585,75 @@ class CommandProcesser:
         dumpManifest = self._dumpSvc.GetDumplingManfiest(self._args.dumpid)
         
         #if the dump OS is not debuggable on this system error and return
-        if dumpManifest['oS'] != platform.system().lower():
+        if dumpManifest['os'] != platform.system().lower():
             Output.Critical('the specified dump can only be debugged on the %s platform'%(dumpManifest['oS']))
             return
-
-        #donwload the dump
-        self._download_dump(dumpManifest)
         
         #find the dump path from the manifest
-        
+        dumppath = next((dumpart['relativePath'] for dumpart in dumpManifest['dumpArtifacts'] if dumpart['hash'] == dumpart['dumpId']), None)
 
-    def _download_dump(self, dumpManifest):
+        Output.Diagnostic('dumppath: %s'%(dumppath))
+
+        #if there is no dump file found in the manifest error and return 
+        if dumppath is None:
+            Output.Critical('the specified dump does not have a dump file associated with it')
+            return
+           
+        #donwload the dump
+        dumplingDir = self._download_dump(self._args.downdir, dumpManifest)
+           
+        fulldumppath = os.path.join(dumplingDir, dumppath)      
+            
+        Output.Diagnostic('Dump Path:  %s'%(fulldumppath))
+                                                                                         
+        if platform.system().lower() == 'linux':   
+                
+            execImage = next((dumpart['relativePath'] for dumpart in dumpManifest['dumpArtifacts'] if dumpart['debugCritical']), None)
+            
+            execImage = None if not execImage else os.path.join(dumplingDir, execImage)
+
+            #if the executable image is not available error and return
+            if not execImage or not os.path.isfile(execImage):
+                Output.Critical('the executable image for specified core dump is not available')
+                return
+
+                                                                         
+            #self._args.dbgargs.extend([ '-o', 'platform select --sysroot "%s" remote-linux'%(dumplingDir) ])  
+
+                                                           
+                                                                                                                                        
+            self._args.dbgargs.extend([ '-o', 'target create -c %s %s'%(fulldumppath, execImage) ])       
+            self._args.dbgargs.extend([ '-o', 'target modules search-paths add /lib64/ %s/lib64/'%(dumplingDir) ])  
+            self._args.dbgargs.extend([ '-o', 'target modules search-paths add /home/ %s/home/'%(dumplingDir) ])  
+
+            
+            #for dumpart in dumpManifest['dumpArtifacts']:
+            #    if dumpart['debugCritical'] and not dumpart['relativePath'].endswith('libsos.so') and not dumpart['relativePath'].endswith('libmscordaccore.so'):
+            #        artpath = os.path.join(dumplingDir, dumpart['relativePath'])
+                    
+            #        symcmd = 'target symbols add -s "%s"'%(artpath)
+                    
+            #        self._args.dbgargs.extend([ '-o', symcmd ]) 
+
+            sosPath = os.path.join(os.path.dirname(self._args.dbgpath), 'libsosplugin.so')
+
+            self._args.dbgargs.extend([ '-o', 'plugin load %s'%(sosPath) ])   
+
+
+        Output.Diagnostic('Debugger path:  %s'%(self._args.dbgpath))
+                                
+        Output.Diagnostic('Debugger args:  %s'%(self._args.dbgargs))
+        
+        popdir = os.getcwd()
+
+        os.chdir(os.path.dirname(fulldumppath))
+        
+        #load the dump in the debugger   
+        CommandProcesser._load_dump_in_debugger(self._args.dbgpath, self._args.dbgargs)
+        
+        os.chdir(popdir)
+
+    def _download_dump(self, dir, dumpManifest):
         dumplingDir = os.path.join(dir, dumpManifest['displayName'])
             
         if not os.path.exists(dumplingDir):
@@ -600,14 +668,28 @@ class CommandProcesser:
                     self._filequeue.QueueFileDownload(hash, os.path.join(dumplingDir, relPath)) 
         
         #save the manifest at the root 
-        manifestPath = os.path.join(dumplingDir, 'dumpling.manifest.json')
+        manifestPath = os.path.join(dumplingDir, 'manifest.json')
 
         with open(manifestPath, 'w') as manFile:
             _json_format_tofile(dumpManifest, manFile)
  
-        return dumpManifest
+        self._filequeue.WaitForPendingTransfers();
 
-        
+        return dumplingDir
+    
+    @staticmethod
+    def _load_dump_in_debugger(debuggerPath, debuggerArgs):
+
+        procArgs = [ debuggerPath ]
+
+        procArgs.extend(debuggerArgs)
+                                                              
+        Output.Diagnostic('Debugger command:  %s'%(' '.join(procArgs)))
+
+        dbgproc = subprocess.Popen(procArgs)
+
+        dbgproc.wait()
+    
     @staticmethod
     def _add_client_triage_properties(dictProp):
         dictProp = dictProp or { }
@@ -629,10 +711,16 @@ class CommandProcesser:
         if not key in dictProp:
             dictProp[key] = val
 
+def _get_default_dbgargs():
+    if platform.system().lower() == 'windows':
+        return [ '-z', '$(dumppath)' ]
+    else:
+        return [  ]
+
 class DumplingConfig:
 
     s_unsaved_args = { 'action', 'command', 'configpath', 'verbose', 'squelch', 'noprompt' }
-    s_default_args = { 'url': 'https://dumpling.azurewebsites.net/', 'installpath': os.path.join(os.path.expanduser('~'), '.dumpling') }
+    s_default_args = { 'url': 'https://dumpling.azurewebsites.net/', 'installpath': os.path.join(os.path.expanduser('~'), '.dumpling'), 'dbgargs': _get_default_dbgargs() }
     def __init__(self, dictConfig):
         self.__dict__ = copy.copy(DumplingConfig.s_default_args)
 
@@ -656,7 +744,6 @@ class DumplingConfig:
         config.Merge(dictSettings)
         config.Save(strpath)
 
-    
     def Merge(self, dictConfig):
         for key, value in dictConfig.iteritems():
             if value or key not in self.__dict__:

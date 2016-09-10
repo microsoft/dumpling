@@ -170,6 +170,8 @@ namespace dumpling.web.Controllers
                 {
                     await UploadDumpArtifactAsync(uploader, dumplingDb, dumpling, hash, localpath, true, cancelToken);
 
+                    dumpling.Os = uploader.DumpOS;
+
                     foreach (var dumpArtifact in uploader.GetLoadedModules(dumpling.DumpId))
                     {
                         var artifactIndex = await dumplingDb.ArtifactIndexes.FindAsync(dumpArtifact.Index);
@@ -476,6 +478,7 @@ namespace dumpling.web.Controllers
             var artifact = new Artifact
             {
                 Hash = uploader.Hash,
+                Uuid = uploader.Uuid,
                 Format = uploader.Format,
                 FileName = uploader.FileName,
                 Size = uploader.Decompressed.Length,
@@ -591,7 +594,7 @@ namespace dumpling.web.Controllers
                     Format = ArtifactFormat.Unknown;
                     DumpOS = OS.Unknown;
                 }
-                
+                Uuid = Hash;
                 Index = BuildIndexFromModuleUUID(Hash, IndexPrefix.SHA1, FileName);
             }
 
@@ -654,16 +657,18 @@ namespace dumpling.web.Controllers
                     foreach (var image in coreFile.LoadedImages)
                     {
                         string index = null;
-                        byte[] buildId = null;
+                        string uuid = null;
                         try
                         {
                             //this call will throw an exception if the loaded image doesn't have a build id.  
                             //Unfortunately there is no way to check if build id exists without ex
-                            buildId = image.Image.BuildID;
+                            var buildId = image.Image.BuildID;
 
                             if (buildId != null)
                             {
-                                index = BuildIndexFromModuleUUID(buildId, IndexPrefix.Elf, Path.GetFileName(image.Path));
+                                uuid = string.Concat(buildId.Select(b => b.ToString("x2"))).ToLowerInvariant();
+
+                                index = BuildIndexFromModuleUUID(uuid, IndexPrefix.Elf, Path.GetFileName(image.Path));
                             }
                         }
                         catch { }
@@ -678,9 +683,9 @@ namespace dumpling.web.Controllers
                             //currently the dac index and the sos index are not imbedded in libcoreclr.so 
                             //this should eventually be the case, but for now set the indexes using the buildid from libcoreclr.so
                             //and we will manually add these indexes to the atifact store
-                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libmscordaccore.so"), Index = BuildIndexFromModuleUUID(buildId, IndexPrefix.Elf, "libmscordaccore.so"), DebugCritical = true });
+                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libmscordaccore.so").Replace('\\', '/'), Index = BuildIndexFromModuleUUID(uuid, IndexPrefix.Elf, "libmscordaccore.so"), DebugCritical = true });
 
-                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libsos.so"), Index = BuildIndexFromModuleUUID(buildId, IndexPrefix.Elf, "libsos.so"), DebugCritical = true });
+                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libsos.so").Replace('\\', '/'), Index = BuildIndexFromModuleUUID(uuid, IndexPrefix.Elf, "libsos.so"), DebugCritical = true });
                         }
                     }
 
@@ -702,6 +707,8 @@ namespace dumpling.web.Controllers
             public Stream Decompressed { get; protected set; }
 
             public string Hash { get; protected set; }
+
+            public string Uuid { get; protected set; }
 
             public string Index { get; protected set; }
 
@@ -756,47 +763,57 @@ namespace dumpling.web.Controllers
 
             protected virtual void ComputeFormatAndIndex()
             {
-                string index;
+                string uuid;
 
-                if(TryGetElfIndex(Decompressed, FileName, out index))
+                string indexPrefix;
+
+                if(TryGetElfIndex(Decompressed, out uuid))
                 {
                     Format = ArtifactFormat.Elf;
+
+                    indexPrefix = IndexPrefix.Elf;
                 }
-                else if(TryGetPEIndex(Decompressed, FileName, out index))
+                else if(TryGetPEIndex(Decompressed, out uuid))
                 {
                     Format = ArtifactFormat.PE;
+
+                    indexPrefix = IndexPrefix.PE;
                 }
-                else if (TryGetPDBIndex(Decompressed, FileName, out index))
+                else if (TryGetPDBIndex(Decompressed, out uuid))
                 {
                     Format = ArtifactFormat.PDB;
+
+                    indexPrefix = IndexPrefix.PDB;
                 }
                 else
                 {
                     Format = ArtifactFormat.Unknown;
 
-                    index = BuildIndexFromModuleUUID(Hash, IndexPrefix.SHA1, FileName);
+                    uuid = Hash;
+
+                    indexPrefix = IndexPrefix.SHA1;
                 }
 
-                Index = index;
-            }
-            
+                Uuid = uuid;
 
-            protected static string BuildIndexFromModuleUUID(byte[] uuid, string indexStyleId, string filename)
-            {
-                string uuidStr = string.Concat(uuid.Select(b => b.ToString("x2"))).ToLowerInvariant();
-
-                return BuildIndexFromModuleUUID(uuidStr, indexStyleId, filename);
+                Index = BuildIndexFromModuleUUID(uuid, indexPrefix, FileName);
             }
 
-            protected static string BuildIndexFromModuleUUID(string uuid, string indexStyleId, string filename)
+
+            protected static string BuildIndexFromModuleUUID(string uuid, string indexPrefix, string filename)
             {
+                if (string.IsNullOrEmpty(uuid))
+                {
+                    return null;
+                }
+                
                 var key = new StringBuilder();
 
                 key.Append(filename);
 
                 key.Append("/");
 
-                key.Append(indexStyleId);
+                key.Append(indexPrefix);
                 
                 key.Append(uuid);
 
@@ -809,9 +826,9 @@ namespace dumpling.web.Controllers
                 return key.ToString();
             }
 
-            private static bool TryGetElfIndex(Stream stream, string filename, out string index)
+            private static bool TryGetElfIndex(Stream stream, out string uuid)
             {
-                index = null;
+                uuid = null;
 
                 try
                 {
@@ -826,8 +843,8 @@ namespace dumpling.web.Controllers
                     {
                         return false;
                     }
-
-                    index = BuildIndexFromModuleUUID(elf.BuildID, IndexPrefix.Elf, filename);
+                    
+                    uuid = string.Concat(elf.BuildID.Select(b => b.ToString("x2"))).ToLowerInvariant();
 
                     return true;
                 }
@@ -838,14 +855,9 @@ namespace dumpling.web.Controllers
 
             }
             
-            private static bool TryGetPEIndex(Stream stream, string filename, out string index)
+            private static bool TryGetPEIndex(Stream stream, out string uuid)
             {
-                index = null;
-                string extension = Path.GetExtension(filename);
-                if (extension != ".dll" && extension != ".exe")
-                {
-                    return false;
-                }
+                uuid = null;
 
                 StreamAddressSpace fileAccess = new StreamAddressSpace(stream);
                 try
@@ -856,10 +868,8 @@ namespace dumpling.web.Controllers
                         return false;
                     }
 
-                    string key = reader.Timestamp.ToString("x").ToLowerInvariant() + reader.SizeOfImage.ToString("x").ToLowerInvariant();
-
-                    index = BuildIndexFromModuleUUID(key, IndexPrefix.PE, filename);
-
+                    uuid = reader.Timestamp.ToString("x").ToLowerInvariant() + reader.SizeOfImage.ToString("x").ToLowerInvariant();
+                    
                     return true;
                 }
                 catch (InputParsingException)
@@ -868,23 +878,20 @@ namespace dumpling.web.Controllers
                 }
             }
 
-            private static bool TryGetPDBIndex(Stream stream, string filename, out string index)
+            private static bool TryGetPDBIndex(Stream stream, out string uuid)
             {
-                index = null;
+                uuid = null;
                 try
                 {
-                    if (Path.GetExtension(filename) != ".pdb")
-                    {
-                        return false;
-                    }
                     PDBFile pdb = new PDBFile(new StreamAddressSpace(stream));
+
                     if (!pdb.Header.IsMagicValid.Check())
                     {
                         return false;
                     }
     
-                    string key = pdb.Signature.ToString().Replace("-", "").ToLowerInvariant() + pdb.Age.ToString("x").ToLowerInvariant();
-                    index = BuildIndexFromModuleUUID(key, IndexPrefix.PDB, filename);
+                    uuid = pdb.Signature.ToString().Replace("-", "").ToLowerInvariant() + pdb.Age.ToString("x").ToLowerInvariant();
+                    
                     return true;
                 }
                 catch (InputParsingException)

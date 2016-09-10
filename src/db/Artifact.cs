@@ -29,6 +29,10 @@ namespace dumpling.db
         [DataMember]
         public string Hash { get; set; }
 
+        [StringLength(64)]
+        [DataMember]
+        public string Uuid { get; set; }
+
         [DataMember]
         public string FileName { get; set; }
         
