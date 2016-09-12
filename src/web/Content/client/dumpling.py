@@ -26,6 +26,8 @@ import datetime
 import copy
 import stat
 import subprocess
+import sys
+import errno
 
 def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
@@ -36,6 +38,7 @@ def _json_format_tofile(obj, file):
 class Output:
     s_squelch=False
     s_verbose=False
+    s_quiet=False
     s_noprompt=False
     s_logPath=''
     s_lock=threading.Lock()
@@ -60,7 +63,8 @@ class Output:
 
         try:
             # always print out essential information.
-            print output
+            if not Output.s_quiet:
+                print output
         
             # sometimes amend our essential output to an existing log file.
             if(Output.s_logPath is not None and os.path.isfile(Output.s_logPath)):
@@ -90,7 +94,7 @@ class FileUtils:
         FileUtils._ensure_parent_dir(outpath)
         with gzip.open(outpath, 'wb') as fComp:
             with open(inpath, 'rb') as fDecomp:
-                BLOCKSIZE = 1024 * 1024
+                BLOCKSIZE = 1024 * 8
                 compsize = 0
                 hash = hashlib.sha1()
                 buf = fDecomp.read(BLOCKSIZE)
@@ -106,7 +110,7 @@ class FileUtils:
         FileUtils._ensure_parent_dir(outpath)
         with gzip.open(inpath, 'rb') as fComp:
             with open(outpath, 'wb') as fDecomp:
-                BLOCKSIZE = 1024 * 1024
+                BLOCKSIZE = 1024 * 8
                 compsize = 0
                 hash = hashlib.sha1()
                 buf = fComp.read(BLOCKSIZE)
@@ -130,9 +134,34 @@ class FileUtils:
             except:
                 return
 
+    @staticmethod
+    def _enumerate_unique_files(paths):
+        files = set()
+        for p in paths:
+            p = p.rstrip('\\')
+            p = p.rstrip('/')
+            abspath = os.path.abspath(p)
+            if os.path.isdir(abspath):
+                for dirpath, dirnames, filenames in os.walk(abspath):
+                    for name in filenames:
+                        subpath = os.path.join(dirpath, name)
+                        files.add(subpath)
+            elif os.path.isfile(abspath): 
+                files.add(abspath)   
+        return files
+    
+    @staticmethod
+    def _try_remove(path):
+        try:
+            os.remove(path)
+            return True
+        except OSError as e:
+            # errno.ENOENT = no such file or directory re-raise exception if a different error occured
+            if e.errno != errno.ENOENT: 
+                raise 
+            return False
+    
 class DumplingService:
-    s_inst=None
-
     def __init__(self, baseurl):
         self._dumplingUri = baseurl;
 
@@ -309,8 +338,42 @@ class DumplingService:
             Output.Critical("ERROR: downloaded file did not match expected hash value")
             os.remove(path)
         else: 
-            Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))                
+            Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))           
+     
+class Task:
+    def __init__(self, func, args):
+        self.completed = False
+        self.func = func
+        self.args = args
+        self.result = None   
+        self.exception = None
+        self._condvar = threading.Condition(threading.Lock())
 
+    def execute(self):
+        try:
+            self.result = self.func(*self.args[0:])
+        except Exception as e:                              
+            self.exception = e
+            print "workitem failed with exception: %s" % e
+        finally:
+            self._condvar.acquire()
+            self.completed = True
+            self._condvar.notify_all()
+            self._condvar.release()
+
+    def wait(self, timeout = None):
+        self._condvar.acquire()
+        if not self.completed:
+            self._condvar.wait(timeout)
+        self._condvar.release()
+    
+    def await_result(self, timeout = None):
+        self.wait(timeout)
+        if self.exception:
+            raise self.exception
+        return self.result
+        
+      
 class ThreadPool:
     s_MaxThreads = multiprocessing.cpu_count()
 
@@ -321,62 +384,47 @@ class ThreadPool:
         self._queue = [ ]
         self._emptyevent = threading.Event()
         self._maxthreads = maxthreads or ThreadPool.s_MaxThreads
-        self._draining = False
     
     def queue_work(self, func, args=()):
         self._condvar.acquire()
+                          
+        self._emptyevent.clear()
+        
+        task = Task(func, args)
 
-        if not self._draining:
-            self._queue.append( (func, args) )
+        self._queue.append(task)
+        
+        if self._availcount == 0 and self._threadcount < self._maxthreads:
+            self._threadcount += 1
+            self._add_thread()
 
-            if self._availcount == 0 and self._threadcount < self._maxthreads:
-                self._threadcount += 1
-                self._add_thread()
-
-            self._condvar.notify()
-        else:
-            raise RuntimeError('the thread pool is currently draining and not available to queue work items')
+        self._condvar.notify()
 
         self._condvar.release()
-            
-    def drain(self):
-        self._condvar.acquire()
-        self._draining = True
-        self._condvar.release()
+        
+        return task
+                
+    def wait_on_pending_work(self):
         self._emptyevent.wait()
 
     def _add_thread(self):
         thread = threading.Thread(target=self._process_queue_items, args=())
+        thread.setDaemon(True)
         thread.start()
 
     def _process_queue_items(self):
         while True:
             self._condvar.acquire()
             if len(self._queue) == 0: 
-                if self._draining:
-                    self._condvar.notify_all()
-                    self._thread_exit()
-                    self._condvar.release()             
-                    return
                 self._availcount = self._availcount + 1
+                if self._availcount == self._threadcount:
+                    self._emptyevent.set()
                 self._condvar.wait()
                 self._availcount = self._availcount - 1
-            work = self._queue.pop(0)
-            func = work[0]
-            args = work[1]
+            task = self._queue.pop(0)
             self._condvar.release()
-            try:
-                func(*args[0:])
-            except:
-                self._thread_exit()
-                raise
-
-    def _thread_exit(self):
-        self._condvar.acquire()                     
-        self._threadcount -= 1
-        if self._draining and len(self._queue) == 0 and self._threadcount == 0:
-            self._emptyevent.set() 
-        self._condvar.release()   
+            task.execute()
+ 
         
 class FileTransferManager:
 
@@ -387,37 +435,29 @@ class FileTransferManager:
         self._threadpool._maxthreads
          
     def QueueFileDownload(self, hash, abspath):
-        if self._threadpool._maxthreads <= 1:
-            self._dumpSvc.DownloadArtifact(hash, abspath)
-        else:                                       
-            self._threadpool.queue_work(self._dumpSvc.DownloadArtifact, args=(hash, abspath))
+        return self._threadpool.queue_work(self._dumpSvc.DownloadArtifact, args=(hash, abspath))
         
     def QueueFileUpload(self, dumpid, abspath):
-        if self._threadpool._maxthreads <= 1:
-            self._compress_and_upload(dumpid, abspath)
-        else:                                                                                     
-            self._threadpool.queue_work(self._compress_and_upload, args=(dumpid, abspath))
+        return self._threadpool.queue_work(self._compress_and_upload, args=(dumpid, abspath))
 
     def WaitForPendingTransfers(self):
-        if self._threadpool._maxthreads > 1:
-            self._threadpool.drain()
+        self._threadpool.wait_on_pending_work()
 
     def _compress_and_upload(self, dumpid, abspath):              
         hash = None
         Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(abspath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
         try:
-            fhash = FileUtils._hash_and_compress(abspath, tempPath)
+            hash = FileUtils._hash_and_compress(abspath, tempPath)
             Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
             with open(tempPath, 'rb') as fUpld:
-                self._dumpSvc.UploadArtifact(dumpid, abspath, fhash, fUpld)    
-        
+                self._dumpSvc.UploadArtifact(dumpid, abspath, hash, fUpld)   
         finally:
             try:
                 os.remove(tempPath)
             except:
                 Output.Message('WARNING: failed to remove temp file %s'%(tempPath))
-                
+        return hash  
 
     def UploadDump(self, dumppath, incpaths, origin, displayname):
         #
@@ -429,160 +469,159 @@ class FileTransferManager:
         Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
         with open(tempPath, 'rb') as fUpld:
             dumpData = self._dumpSvc.UploadDump(dumppath, hash, origin, displayname, fUpld)   
-            self.UploadFiles(dumpData['dumplingId'], dumpData['refPaths'])
         os.remove(tempPath)
-        return dumpData['dumplingId']
+        return dumpData
 
-    def UploadFiles(self, dumpid, incpaths):
-        #
-        for abspath in self._add_upload_paths(incpaths):
-            self.QueueFileUpload(dumpid, abspath)          
-    
-    def _add_upload_path(self, abspath):
-        if not self._hashmap.has_key(abspath):
-            self._hashmap[abspath] = None
-            return True
-        else:
-            return False
-
-    def _add_upload_paths(self, incpaths):
-        for p in incpaths:
-            p = p.rstrip('\\')
-            abspath = os.path.abspath(p)
-            if os.path.isdir(abspath):
-                for dirpath, dirnames, filenames in os.walk(abspath):
-                    for name in filenames:
-                        subpath = os.path.join(dirpath, name)
-                        if self._add_upload_path(subpath):
-                            yield subpath
-            elif os.path.isfile(abspath):
-                if self._add_upload_path(abspath):
-                    yield abspath
-
-class CommandProcesser:
-    def __init__(self, args, filequeue, dumpSvc):
-        self._args = args
+class CommandProcessor:
+    def __init__(self, filequeue, dumpSvc):
         self._dumpSvc = dumpSvc
         self._filequeue = filequeue
 
-    def Process(self):
-        if self._args.command == 'upload':
-            self.Upload()
-        elif self._args.command == 'download':
-            self.Download()
-        elif self._args.command == 'config':
-            self.Config()
-        elif self._args.command == 'install':
-            self.Install()
-        elif self._args.command == 'debug':
-            self.Debug()
+    def Process(self, config):
+        if config.command == 'upload':
+            self.Upload(config)
+        elif config.command == 'download':
+            self.Download(config)
+        elif config.command == 'config':
+            self.Config(config)
+        elif config.command == 'install':
+            self.Install(config)
+        elif config.command == 'debug':
+            self.Debug(config)
      
-    def Install(self):
-        if self._args.debug:    
-            dbgPath = self._dumpSvc.DownloadDebugger(os.path.join(self._args.installpath, 'dbg'))
+    def Install(self, config):
+        if config.debug:    
+            dbgPath = self._dumpSvc.DownloadDebugger(os.path.join(config.installpath, 'dbg'))
             if platform.system().lower() != 'windows':
                  os.chmod(dbgPath, stat.S_IEXEC)
             Output.Message('Adding debugger settings dumpling config')
-            DumplingConfig.SaveSettings(self._args.configpath, { 'dbgpath': dbgPath })
+            DumplingConfig.SaveSettings(config.configpath, { 'dbgpath': dbgPath })
             Output.Message('Debugger successfully installed')
             
-                
-            
-    def Config(self):
-        if self._args.action == 'dump':
-            config = DumplingConfig.Load(self._args.configpath)
-            if config is None:
+    def Config(self, config):
+        if config.action == 'dump':
+            loaded = DumplingConfig.Load(config.configpath)
+            if loaded is None:
                 Output.Message('no dumpling configuration file was found')            
             else:
-                Output.Message(str(config))
+                Output.Message(str(loaded))
         
-        if self._args.action == 'save':
-            Output.Message(str(self._args))
-            self._args.Save(self._args.configpath)
+        if config.action == 'save':
+            Output.Message(str(config))
+            config.Save(config.configpath)
                                                                
-        if self._args.action == 'clear':
-            if os.path.isfile(self._args.configpath) and Output.Prompt_YN('Delete file "%s"?'%(self._args.configpath)):
-                os.remove(self._args.configpath)
+        if config.action == 'clear':
+            if os.path.isfile(config.configpath) and Output.Prompt_YN('Delete file "%s"?'%(config.configpath)):
+                os.remove(config.configpath)
                 Output.Message('Configuration cleared') 
             else:
                 Output.Message('Command aborted. No changes were made.')                                                                                                                       
-            
-
-    def Upload(self):
+        
+    def Upload(self, config):
         
         dumpid = None
         
         #if nothing was specified to upload
-        if self._args.dumppath is None and (self._args.incpaths is None or len(self._args.incpaths) == 0):
+        if config.dumppath is None and (config.incpaths is None or len(config.incpaths) == 0):
             Output.Critical('No artifacts or dumps were specified to upload, either --dumppath or --incpaths is required to upload')
 
         #if dumppath was specified call create dump and upload dump
-        if self._args.dumppath is not None:
+        if config.dumppath is not None:
+            self.UploadDump(config)
+        else:
+            self.UploadArtifacts(config)
 
-            self._args.dumppath = os.path.abspath(self._args.dumppath)
 
-            if self._args.displayname is None:
-                self._args.displayname = str('%s.%.7f'%(getpass.getuser().lower(), time.time()))
+    def UploadDump(self, config):
+        config.dumppath = os.path.abspath(config.dumppath)
 
-            dumpid = self._filequeue.UploadDump(self._args.dumppath, self._args.incpaths, self._args.user, self._args.displayname)
+        if config.displayname is None:
+            config.displayname = str('%s.%.7f'%(getpass.getuser().lower(), time.time()))
+
+        dumpdata = self._filequeue.UploadDump(config.dumppath, config.incpaths, config.user, config.displayname)
+        
+        dumpid = dumpdata['dumplingId']   
+
+        requestpaths = set(dumpdata['refPaths'])      
+        
+        incpaths = set()
+          
+        if not (config.incpaths is None or len(config.incpaths) == 0):
+            incpaths = FileUtils._enumerate_unique_files(config.incpaths)
+            requestpaths.difference_update(incpaths)
+
+        if len(requestpaths) > 0:
+            prompt = 'The dumpling service has requested the following additional files be uploaded:\n'
+            for p in requestpaths:
+                prompt += p + '\n'
+            prompt += 'Allow upload of requested files?'
+            if Output.Prompt_YN(prompt):
+                incpaths.update(requestpaths)
+    
+        for f in incpaths:
+            self._filequeue.QueueFileUpload(dumpid, f) 
+
+        if config.properties is not None:
+            propDict = { }
+            for kvp in config.properties:
+                if kvp is not None:
+                    CommandProcessor._add_key_if_not_exists(dictProp,kvp[0],kvp[1])
+            config.properties = propDict
             
-            if self._args.properties is not None:
-                propDict = { }
-                for kvp in self._args.properties:
-                    if kvp is not None:
-                        CommandProcesser._add_key_if_not_exists(dictProp,kvp[0],kvp[1])
-                self._args.properties = propDict
-            
-            if not self._args.suppresstriage:
-                self._args.properties = CommandProcesser._add_client_triage_properties(self._args.properties)
+        if not config.suppresstriage:
+            config.properties = CommandProcessor._add_client_triage_properties(config.properties)
 
-            if self._args.properties is not None:
-                self._dumpSvc.UpdateDumpProperties(dumpid, self._args.properties)      
+        if config.properties is not None:
+            self._dumpSvc.UpdateDumpProperties(dumpid, config.properties)      
             
-        #if there are included paths upload them
-        if not (self._args.incpaths is None or len(self._args.incpaths) == 0):
-            self._filequeue.UploadFiles(dumpid, args.incpaths)
-
         self._filequeue.WaitForPendingTransfers();
         
         Output.Message('dumplingid:  %s'%(dumpid))
-        Output.Critical('%sapi/dumplings/archived/%s'%(self._args.url, dumpid ))
+        Output.Critical('%sapi/dumplings/archived/%s'%(config.url, dumpid ))
+
+        return dumpid
+
+    def UploadArtifacts(self, config):
+        if config.incpaths:
+            for f in FileUtils._enumerate_unique_files(config.incpaths):
+                self._filequeue.QueueFileUpload(None, f)
         
-    def Download(self):
+        self._filequeue.WaitForPendingTransfers();
+    
+    def Download(self, config):
         
         #choose download path argument downpath takes precedents since downdir has a defualt
-        path = self._args.downpath or self._args.downdir
+        path = config.downpath or config.downdir
 
         path = os.path.abspath(path)
 
         #determine the directory of the intended download 
-        dir = os.path.dirname(path) if self._args.downpath else path
+        dir = os.path.dirname(path) if config.downpath else path
             
         #create the directory if it doesn't exist
         if not os.path.isdir(dir):
             FileUtils._ensure_dir(dir)
         
-        if self._args.hash is not None:        
-            self._filequeue.QueueFileDownload(self._args.hash, abspath)
+        if config.hash is not None:        
+            self._filequeue.QueueFileDownload(config.hash, path)
             self._filequeue.WaitForPendingTransfers();
 
-        elif self._args.symindex is not None:
+        elif config.symindex is not None:
             Output.Critical('downloading artifacts from index is not yet supported')
-            #self._filequeue.QueueFileIndexDownload(self._args.symindex, abspath)
+            #self._filequeue.QueueFileIndexDownload(config.symindex, abspath)
 
-        elif self._args.dumpid is not None:  
-            dumpManifest = self._dumpSvc.GetDumplingManfiest(self._args.dumpid)
+        elif config.dumpid is not None:  
+            dumpManifest = self._dumpSvc.GetDumplingManfiest(config.dumpid)
             
             self._download_dump(dir, dumpManifest)
 
-
-    def Debug(self):
-        if self._args.dbgpath is None:
+    def Debug(self, config):
+        if config.dbgpath is None:
             Output.Critical('dbgpath must be specified either as an argument or in the dumpling config to use the debug command')
             return
         
         #get the dump manifest                           
-        dumpManifest = self._dumpSvc.GetDumplingManfiest(self._args.dumpid)
+        dumpManifest = self._dumpSvc.GetDumplingManfiest(config.dumpid)
         
         #if the dump OS is not debuggable on this system error and return
         if dumpManifest['os'] != platform.system().lower():
@@ -600,7 +639,7 @@ class CommandProcesser:
             return
            
         #donwload the dump
-        dumplingDir = self._download_dump(self._args.downdir, dumpManifest)
+        dumplingDir = self._download_dump(config.downdir, dumpManifest)
            
         fulldumppath = os.path.join(dumplingDir, dumppath)      
             
@@ -618,13 +657,13 @@ class CommandProcesser:
                 return
 
                                                                          
-            #self._args.dbgargs.extend([ '-o', 'platform select --sysroot "%s" remote-linux'%(dumplingDir) ])  
+            #config.dbgargs.extend([ '-o', 'platform select --sysroot "%s" remote-linux'%(dumplingDir) ])  
 
                                                            
                                                                                                                                         
-            self._args.dbgargs.extend([ '-o', 'target create -c %s %s'%(fulldumppath, execImage) ])       
-            self._args.dbgargs.extend([ '-o', 'target modules search-paths add /lib64/ %s/lib64/'%(dumplingDir) ])  
-            self._args.dbgargs.extend([ '-o', 'target modules search-paths add /home/ %s/home/'%(dumplingDir) ])  
+            config.dbgargs.extend([ '-o', 'target create -c %s %s'%(fulldumppath, execImage) ])       
+            config.dbgargs.extend([ '-o', 'target modules search-paths add /lib64/ %s/lib64/'%(dumplingDir) ])  
+            config.dbgargs.extend([ '-o', 'target modules search-paths add /home/ %s/home/'%(dumplingDir) ])  
 
             
             #for dumpart in dumpManifest['dumpArtifacts']:
@@ -633,23 +672,23 @@ class CommandProcesser:
                     
             #        symcmd = 'target symbols add -s "%s"'%(artpath)
                     
-            #        self._args.dbgargs.extend([ '-o', symcmd ]) 
+            #        config.dbgargs.extend([ '-o', symcmd ]) 
 
-            sosPath = os.path.join(os.path.dirname(self._args.dbgpath), 'libsosplugin.so')
+            sosPath = os.path.join(os.path.dirname(config.dbgpath), 'libsosplugin.so')
 
-            self._args.dbgargs.extend([ '-o', 'plugin load %s'%(sosPath) ])   
+            config.dbgargs.extend([ '-o', 'plugin load %s'%(sosPath) ])   
 
 
-        Output.Diagnostic('Debugger path:  %s'%(self._args.dbgpath))
+        Output.Diagnostic('Debugger path:  %s'%(config.dbgpath))
                                 
-        Output.Diagnostic('Debugger args:  %s'%(self._args.dbgargs))
+        Output.Diagnostic('Debugger args:  %s'%(config.dbgargs))
         
         popdir = os.getcwd()
 
         os.chdir(os.path.dirname(fulldumppath))
         
         #load the dump in the debugger   
-        CommandProcesser._load_dump_in_debugger(self._args.dbgpath, self._args.dbgargs)
+        CommandProcessor._load_dump_in_debugger(config.dbgpath, config.dbgargs)
         
         os.chdir(popdir)
 
@@ -693,17 +732,17 @@ class CommandProcesser:
     @staticmethod
     def _add_client_triage_properties(dictProp):
         dictProp = dictProp or { }
-        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_ARCHITECTURE', platform.machine())
-        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_PROCESSOR', platform.processor())
-        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_NAME', platform.node())
-        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_OS', platform.system())           
-        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_RELEASE', platform.release())     
-        CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_VERSION', platform.version())
+        CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_ARCHITECTURE', platform.machine())
+        CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_PROCESSOR', platform.processor())
+        CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_NAME', platform.node())
+        CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_OS', platform.system())           
+        CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_RELEASE', platform.release())     
+        CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_VERSION', platform.version())
         if platform.system() == 'Linux':
             distroTuple = platform.linux_distribution()
-            CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_DISTRO', distroTuple[0])
-            CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_DISTRO_VER', distroTuple[1])
-            CommandProcesser._add_key_if_not_exists(dictProp, 'CLIENT_DISTRO_ID', distroTuple[2])
+            CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_DISTRO', distroTuple[0])
+            CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_DISTRO_VER', distroTuple[1])
+            CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_DISTRO_ID', distroTuple[2])
         return dictProp
 
     @staticmethod
@@ -766,10 +805,7 @@ def _parse_key_value_pair(argStr):
     if len(kvp) != 2:
         raise argparse.ArgumentError('the specified property key value pair is invalid. ' + argstr)
 
-if __name__ == '__main__':
-
-    starttime = datetime.datetime.now();
-
+def _parse_args(argv):
     sharedparser = argparse.ArgumentParser(add_help=False)
     
     sharedparser.add_argument('--verbose', default=False, action='store_true', help='indicates that  all critical, standard, and diagnostic messages should be output')
@@ -817,11 +853,11 @@ if __name__ == '__main__':
     download_idtype = download_parser.add_mutually_exclusive_group(required=True)                                                                                             
     
     download_idtype.add_argument('--dumpid', type=str, help='the dumpling id of the dump to download for debugging')   
-    
+
     download_idtype.add_argument('--hash', type=str, help='the id of the artifact to download')  
-   
+
     download_idtype.add_argument('--symindex', type=str, help='the symstore index of the artifact to download')
-                                                                                   
+
     download_parser.add_argument('--downpath', type=str, help='the path to download the specified content to. NOTE: if both downpath and downdir are specified downdir will be ignored')
 
     download_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')    
@@ -854,23 +890,46 @@ if __name__ == '__main__':
                                                  
     debug_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')    
     
-    parsed_args = parser.parse_args()
+    parsed_args = parser.parse_args(argv)
 
     config = DumplingConfig.Load(parsed_args.configpath) or DumplingConfig({ })
+    
     config.Merge(parsed_args.__dict__)
 
+    return config
+
+def _create_command_processor(config):
+    dumplingsvc = DumplingService(config.url)
     
+    filequeue = FileTransferManager(dumplingsvc)
+    
+    return CommandProcessor(filequeue, dumplingsvc)
+
+def _init_output(config):
     Output.s_verbose = config.verbose
+    
     Output.s_squelch = config.squelch
+    
     Output.s_logPath = config.logpath
+    
     Output.s_noprompt = config.noprompt
 
-    DumplingService.s_inst = DumplingService(config.url)
-    filequeue = FileTransferManager(DumplingService.s_inst)
-    cmdProcesser = CommandProcesser(config, filequeue, DumplingService.s_inst)
-    cmdProcesser.Process()
+def main(argv):
+    
+    starttime = datetime.datetime.now();
+
+    config = _parse_args(argv[1:])
+    
+    _init_output(config)
+
+    cmdProc = _create_command_processor(config)
+
+    cmdProc.Process(config)
 
     Output.Message('total elapsed time %s'%(datetime.datetime.now() - starttime))
+
+if __name__ == '__main__':
+    main(sys.argv)
 
 
 
