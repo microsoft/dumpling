@@ -51,6 +51,9 @@ namespace dumpling.db
         public DateTime DumpTime { get; set; }
 
         [DataMember]
+        public DateTime? Expiration { get; set; }
+
+        [DataMember]
         public virtual ICollection<DumpArtifact> DumpArtifacts { get; set; }
 
         [DataMember]
