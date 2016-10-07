@@ -28,6 +28,7 @@ import stat
 import subprocess
 import sys
 import errno
+import shutil
 
 def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
@@ -201,6 +202,22 @@ class DumplingService:
 
         return  dbgPath                                                         
 
+    def DownloadClientFile(self, filename, downdir):
+        url = self._dumplingUri + 'api/client/' + filename;
+                          
+        Output.Diagnostic('   url: %s'%(url))
+        
+        response = requests.get(url);
+
+        Output.Diagnostic('   response: %s'%(response))   
+
+        response.raise_for_status()
+
+        self._stream_file_from_response(os.path.join(downdir, filename))  
+        
+        Output.Message('downloaded %s'%(filename))   
+
+
     def GetDumplingManfiest(self, dumpid):
         url = self._dumplingUri  + 'api/dumplings/' + dumpid + '/manifest'
 
@@ -338,7 +355,13 @@ class DumplingService:
             Output.Critical("ERROR: downloaded file did not match expected hash value")
             os.remove(path)
         else: 
-            Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))           
+            Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))      
+
+    def _stream_file_from_response(response, path):
+        FileUtils._ensure_parent_dir(path)
+        with open(path, 'wb') as fd:
+            for chunk in response.iter_content(1024*8):
+                fd.write(chunk)     
      
 class Task:
     def __init__(self, func, args):
@@ -490,13 +513,42 @@ class CommandProcessor:
             self.Debug(config)
      
     def Install(self, config):
-        if config.debug:    
+        if config.debug or config.all:    
             dbgPath = self._dumpSvc.DownloadDebugger(os.path.join(config.installpath, 'dbg'))
             if platform.system().lower() != 'windows':
                  os.chmod(dbgPath, stat.S_IEXEC)
             Output.Message('Adding debugger settings dumpling config')
             DumplingConfig.SaveSettings(config.configpath, { 'dbgpath': dbgPath })
             Output.Message('Debugger successfully installed')
+
+        if config.triage or config.all:
+            self._dumpSvc.DownloadClientFile('analysis.py', config.installpath)
+            self._dumpSvc.DownloadClientFile('triage.ini', config.installpath)  
+        
+        localdumplingpath = os.path.abspath(__file__)
+
+        installdumplingpath = os.path.join(config.installpath, 'dumpling.py')
+
+        #copy dumpling.py to the install directory if it doesn't exist or the current file is newer
+        if not os.path.isfile(installdumplingpath) or os.path.getmtime(localdumplingpath) > os.path.getmtime(installdumplingpath):
+
+            shutil.copyfile(localdumplingpath, installdumplingpath)
+
+            #if we copied dumpling.py see if there is a dumpling.config.json next to it
+            localconfigpath = os.path.join(os.path.dirname(localdumplingpath), 'dumpling.config.json')
+            installconfigpath = os.path.join(config.installpath, 'dumpling.config.json')
+
+            if os.path.isfile(localconfigpath) and (not os.path.isfile(installconfigpath) or os.path.getmtime(localconfigpath) > os.path.getmtime(installconfigpath)):
+                
+                shutil.copyfile(localconfigpath, installconfigpath)
+
+        if platform.system().lower() != 'windows':
+            #create the shortcut link                      
+            linkPath = os.path.expanduser('~/bin/dumpling')
+            if not os.path.isfile(linkPath):
+                FileUtils._ensure_parent_dir(linkPath)
+                with open(linkPath, 'w') as link:
+                    link.write('#!/bin/sh\npython %s "$@"'%(installdumplingpath))
             
     def Config(self, config):
         if config.action == 'dump':
@@ -647,7 +699,7 @@ class CommandProcessor:
                                                                                          
         if platform.system().lower() == 'linux':   
                 
-            execImage = next((dumpart['relativePath'] for dumpart in dumpManifest['dumpArtifacts'] if dumpart['debugCritical']), None)
+            execImage = next((dumpart['relativePath'] for dumpart in dumpManifest['dumpArtifacts'] if dumpart['executableImage']), None)
             
             execImage = None if not execImage else os.path.join(dumplingDir, execImage)
 
@@ -656,23 +708,25 @@ class CommandProcessor:
                 Output.Critical('the executable image for specified core dump is not available')
                 return
 
-                                                                         
-            #config.dbgargs.extend([ '-o', 'platform select --sysroot "%s" remote-linux'%(dumplingDir) ])  
+            searchPaths = { }
 
-                                                           
+            #find all the local paths which have loaded modules under them            
+            for dumpart in dumpManifest['dumpArtifacts']:
+                searchDir = os.path.dirname(os.path.join(dumplingDir, dumpart['relativePath']))
+
+                Output.Diagnostic('searchDir: %s'%str(searchDir))
+
+                searchPaths[str(searchDir)] = None
+
+            Output.Diagnostic('searchPaths: %s'%str(searchPaths))
+
+            searchPathsStr = ' '.join(searchPaths.keys())
+                                                    
+            Output.Diagnostic('searchPathsStr: ' + searchPathsStr)
+
+            config.dbgargs.extend(['-o', 'settings set target.exec-search-paths "%s"'%(searchPathsStr)])
                                                                                                                                         
-            config.dbgargs.extend([ '-o', 'target create -c %s %s'%(fulldumppath, execImage) ])       
-            config.dbgargs.extend([ '-o', 'target modules search-paths add /lib64/ %s/lib64/'%(dumplingDir) ])  
-            config.dbgargs.extend([ '-o', 'target modules search-paths add /home/ %s/home/'%(dumplingDir) ])  
-
-            
-            #for dumpart in dumpManifest['dumpArtifacts']:
-            #    if dumpart['debugCritical'] and not dumpart['relativePath'].endswith('libsos.so') and not dumpart['relativePath'].endswith('libmscordaccore.so'):
-            #        artpath = os.path.join(dumplingDir, dumpart['relativePath'])
-                    
-            #        symcmd = 'target symbols add -s "%s"'%(artpath)
-                    
-            #        config.dbgargs.extend([ '-o', symcmd ]) 
+            config.dbgargs.extend([ '-o', 'target create -c %s %s'%(fulldumppath, execImage) ]) 
 
             sosPath = os.path.join(os.path.dirname(config.dbgpath), 'libsosplugin.so')
 
@@ -876,7 +930,9 @@ def _parse_args(argv):
 
     install_parser.add_argument('--debug', default=None, action='store_true', help='indicates that platform specific debugger should be installed on the client') 
 
-    install_parser.add_argument('--triage', default=None, action='store_true', help='indicates that dumpling triage tooling should be installed on the client') 
+    install_parser.add_argument('--triage', default=None, action='store_true', help='indicates that dumpling triage tooling should be installed on the client')     
+ 
+    install_parser.add_argument('--all', default=None, action='store_true', help='indicates that dumpling tools should be installed on the client') 
     
     install_parser.add_argument('--installpath', type=str, help='path to the root directory to install dumpling tooling')
 

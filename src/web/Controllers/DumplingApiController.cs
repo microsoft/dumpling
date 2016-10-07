@@ -46,7 +46,7 @@ namespace dumpling.web.Controllers
             return result;
         }
 
-        [Route("api/client/tools/debug")]
+        [Route("api/tools/debug")]
         [HttpGet]
         public async Task<HttpResponseMessage> GetDebugToolsAsync([FromUri] string os, CancellationToken cancelToken, [FromUri] string distro = null, [FromUri] string arch = null)
         {
@@ -73,6 +73,14 @@ namespace dumpling.web.Controllers
                     await dumplingDb.Entry(dump).Reference(d => d.Failure).LoadAsync();
 
                     await dumplingDb.Entry(dump).Collection(d => d.DumpArtifacts).LoadAsync();
+
+                    foreach (var dumpart in dump.DumpArtifacts)
+                    {
+                        if (dumpart.Hash != null)
+                        {
+                            await dumplingDb.Entry(dumpart).Reference(da => da.Artifact).LoadAsync();
+                        }
+                    }
 
                     await dumplingDb.Entry(dump).Collection(d => d.Properties).LoadAsync();
                 }
@@ -658,8 +666,11 @@ namespace dumpling.web.Controllers
                     {
                         string index = null;
                         string uuid = null;
+                        bool executableImage = false;
                         try
                         {
+                            executableImage = image.Image.Header.Type == ELFHeaderType.Executable;
+
                             //this call will throw an exception if the loaded image doesn't have a build id.  
                             //Unfortunately there is no way to check if build id exists without ex
                             var buildId = image.Image.BuildID;
@@ -673,7 +684,7 @@ namespace dumpling.web.Controllers
                         }
                         catch { }
 
-                        dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = image.Path, Index = index, DebugCritical = true });
+                        dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = image.Path, Index = index, DebugCritical = true, ExecutableImage = executableImage });
 
                         //if the image is libcoreclr.so also add libmscordaccore.so and libsos.so at the same path
                         if(Path.GetFileName(image.Path) == "libcoreclr.so")

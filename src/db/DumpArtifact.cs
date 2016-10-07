@@ -37,6 +37,9 @@ namespace dumpling.db
         [DataMember]
         public bool DebugCritical { get; set; }
 
+        [DataMember]
+        public bool ExecutableImage { get; set; }
+
         [Timestamp]
         public byte[] Timestamp { get; set; }
 
