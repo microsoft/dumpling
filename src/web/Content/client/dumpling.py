@@ -167,7 +167,7 @@ class DumplingService:
         self._dumplingUri = baseurl;
 
     def DownloadDebugger(self, outputdir):
-        url = self._dumplingUri + 'api/client/tools/debug?'
+        url = self._dumplingUri + 'api/tools/debug?'
                                
         osStr = platform.system().lower()
 
@@ -213,7 +213,7 @@ class DumplingService:
 
         response.raise_for_status()
 
-        self._stream_file_from_response(os.path.join(downdir, filename))  
+        DumplingService._stream_file_from_response(response, os.path.join(downdir, filename))  
         
         Output.Message('downloaded %s'%(filename))   
 
@@ -356,7 +356,8 @@ class DumplingService:
             os.remove(path)
         else: 
             Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))      
-
+                   
+    @staticmethod
     def _stream_file_from_response(response, path):
         FileUtils._ensure_parent_dir(path)
         with open(path, 'wb') as fd:

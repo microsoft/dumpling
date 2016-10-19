@@ -151,7 +151,9 @@ def analyze(debugger, command, result, internal_dict):
     eng.add_analyzer(StopReasonAnalyzer())
     eng.add_analyzer(LastExceptionAnalyzer())
     eng.add_analyzer(HeapCorruptionAnalyzer())  
-    eng.add_analyzer(AllThreadsAnalyzer())
+    
+    #dissabling the all threads analyzer as this schema has been removed from dumpling db
+    #eng.add_analyzer(AllThreadsAnalyzer())
     
     dictProps = { }
 
