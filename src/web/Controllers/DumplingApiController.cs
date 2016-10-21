@@ -111,6 +111,30 @@ namespace dumpling.web.Controllers
 
                 var propDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(properties.ToString());
 
+                string failureHash = null;
+
+                //if the properties contain FAILURE_HASH get the failure
+                if(propDict.TryGetValue("FAILURE_HASH", out failureHash))
+                {
+                    //if the failure is not in the db yet try to add it
+                    if(await dumplingDb.Failures.FindAsync(cancelToken, failureHash) == null)
+                    {
+                        try
+                        {
+                            dumplingDb.Failures.Add(new Failure() { FailureHash = failureHash });
+
+                            await dumplingDb.SaveChangesAsync();
+                        }
+                        //swallow the validation exception if the failure was inserted by another request since we checked
+                        catch(DbEntityValidationException e) 
+                        {
+
+                        }
+                    }
+
+                    dumpling.FailureHash = failureHash;
+                }
+
                 //update any properties which were pre-existing with the new value
                 foreach (var existingProp in dumpling.Properties)
                 {

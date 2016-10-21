@@ -167,7 +167,7 @@ class DumplingService:
         self._dumplingUri = baseurl;
 
     def DownloadDebugger(self, outputdir):
-        url = self._dumplingUri + 'api/client/tools/debug?'
+        url = self._dumplingUri + 'api/tools/debug?'
                                
         osStr = platform.system().lower()
 
@@ -213,7 +213,7 @@ class DumplingService:
 
         response.raise_for_status()
 
-        self._stream_file_from_response(os.path.join(downdir, filename))  
+        DumplingService._stream_file_from_response(response, os.path.join(downdir, filename))  
         
         Output.Message('downloaded %s'%(filename))   
 
@@ -356,7 +356,8 @@ class DumplingService:
             os.remove(path)
         else: 
             Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))      
-
+                   
+    @staticmethod
     def _stream_file_from_response(response, path):
         FileUtils._ensure_parent_dir(path)
         with open(path, 'wb') as fd:
@@ -503,6 +504,8 @@ class CommandProcessor:
     def Process(self, config):
         if config.command == 'upload':
             self.Upload(config)
+        elif config.command == 'update':
+            self.Update(config)
         elif config.command == 'download':
             self.Download(config)
         elif config.command == 'config':
@@ -568,7 +571,14 @@ class CommandProcessor:
                 Output.Message('Configuration cleared') 
             else:
                 Output.Message('Command aborted. No changes were made.')                                                                                                                       
-        
+    
+    def Update(self, config):
+        self.UpdateProperties(config.dumpid, config, None)
+
+        if config.incpaths:
+            for f in FileUtils._enumerate_unique_files(config.incpaths):
+                self._filequeue.QueueFileUpload(config.dumpid, f)
+
     def Upload(self, config):
         
         dumpid = None
@@ -593,6 +603,10 @@ class CommandProcessor:
         dumpdata = self._filequeue.UploadDump(config.dumppath, config.incpaths, config.user, config.displayname)
         
         dumpid = dumpdata['dumplingId']   
+         
+        props = None if config.suppresstriage else CommandProcessor._get_client_triage_properties()
+
+        self.UpdateProperties(dumpid, config, props)
 
         requestpaths = set(dumpdata['refPaths'])      
         
@@ -613,25 +627,32 @@ class CommandProcessor:
         for f in incpaths:
             self._filequeue.QueueFileUpload(dumpid, f) 
 
-        if config.properties is not None:
-            propDict = { }
-            for kvp in config.properties:
-                if kvp is not None:
-                    CommandProcessor._add_key_if_not_exists(dictProp,kvp[0],kvp[1])
-            config.properties = propDict
-            
-        if not config.suppresstriage:
-            config.properties = CommandProcessor._add_client_triage_properties(config.properties)
-
-        if config.properties is not None:
-            self._dumpSvc.UpdateDumpProperties(dumpid, config.properties)      
-            
         self._filequeue.WaitForPendingTransfers();
         
         Output.Message('dumplingid:  %s'%(dumpid))
         Output.Critical('%sapi/dumplings/archived/%s'%(config.url, dumpid ))
 
         return dumpid
+
+    def UpdateProperties(self, dumpid, config, props):
+
+        props = props or { }
+
+        if config.properties is not None:
+            for kvp in config.properties:
+                if kvp is not None:
+                    CommandProcessor._add_key_if_not_exists(props, kvp[0], kvp[1])
+            
+        
+        if config.propfile is not None:
+            loadedProps = json.load(config.propfile)              
+            for kvp in loadedProps.iteritems():
+                if kvp is not None:
+                    CommandProcessor._add_key_if_not_exists(props, kvp[0], kvp[1]) 
+
+        if len(props) > 0: 
+            self._dumpSvc.UpdateDumpProperties(dumpid, props)      
+                
 
     def UploadArtifacts(self, config):
         if config.incpaths:
@@ -784,8 +805,8 @@ class CommandProcessor:
         dbgproc.wait()
     
     @staticmethod
-    def _add_client_triage_properties(dictProp):
-        dictProp = dictProp or { }
+    def _get_client_triage_properties():
+        dictProp = { }
         CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_ARCHITECTURE', platform.machine())
         CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_PROCESSOR', platform.processor())
         CommandProcessor._add_key_if_not_exists(dictProp, 'CLIENT_NAME', platform.node())
@@ -858,6 +879,8 @@ def _parse_key_value_pair(argStr):
 
     if len(kvp) != 2:
         raise argparse.ArgumentError('the specified property key value pair is invalid. ' + argstr)
+
+    return kvp
 
 def _parse_args(argv):
     sharedparser = argparse.ArgumentParser(add_help=False)
