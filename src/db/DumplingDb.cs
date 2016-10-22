@@ -57,7 +57,7 @@ namespace dumpling.db
                 {
                     var prop = properties[i];
 
-                    query.Append($"JOIN [Properties] [P{i}] ON [D].[DumpId] == [P{i}].[DumpId] AND [P{i}].[Name] == @p{pi++} AND [P{i}].[Value] == @p{pi++} ");
+                    query.Append($"JOIN [Properties] [P{i}] ON [D].[DumpId] = [P{i}].[DumpId] AND [P{i}].[Name] = @p{pi++} AND [P{i}].[Value] = @p{pi++} ");
 
                     queryParameters.Add(prop.Key);
 
@@ -69,9 +69,16 @@ namespace dumpling.db
 
             if (failureHash != null)
             {
-                query.Append($"[D].[FailureHash] == @p{pi++} AND ");
+                if (failureHash == "UNTRIAGED")
+                {
+                    query.Append($"[D].[FailureHash] IS NULL AND ");
+                }
+                else
+                {
+                    query.Append($"[D].[FailureHash] = @p{pi++} AND ");
 
-                queryParameters.Add(failureHash);
+                    queryParameters.Add(failureHash);
+                }
             }
 
             query.Append($"[D].[DumpTime] >= @p{pi++} AND [D].[DumpTime] <= @p{pi++}");
