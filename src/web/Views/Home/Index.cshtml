@@ -74,7 +74,7 @@
         td.failure_hash {
             font-family: 'Courier', monospace;
             font-weight: bolder;
-            font-size: 28px;
+            font-size: 20px;
             font-weight: bolder;
             text-align: left;
             background-color: #FFFAFA;
@@ -199,7 +199,7 @@
             @foreach (var failure in (ViewData["Failures"] as string[]))
             {
                 <tr style="border-top:thin solid #ff6a00;">
-                    <td class="failure_hash"><p>@Html.Encode(failure)</p></td>
+                    <td class="failure_hash"><a href="?FAILURE_HASH=@Uri.EscapeDataString(failure)">@Html.Encode(failure)</a></td>
                     <td class="hitcount" rowspan="2" align="center" valign="middle">
                         <p>@Html.Encode((ViewData[failure ?? "UNTRIAGED"] as dumpling.db.Dump[]).Count())</p>
                     </td>

@@ -15,12 +15,6 @@ namespace dumpling.web.Controllers
         [Route("{days:int?}")]
         public async Task<ActionResult> Index(int? days)
         {
-            return await this.FilterIndex(null, null);
-        }
-
-        [Route("{days:int?}/filter{*queryParams}")]
-        public async Task<ActionResult> FilterIndex(int? days, string queryParams)
-        {
             var queryDict = new Dictionary<string, string>();
 
             foreach(var key in this.Request.QueryString.AllKeys)
@@ -67,7 +61,7 @@ namespace dumpling.web.Controllers
             ViewBag.Title = "dumpling";
 
             ViewData["Failures"] = failures.ToArray();
-            return View();
+            return View("Index");
         }
     }
 }

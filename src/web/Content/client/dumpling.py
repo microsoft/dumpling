@@ -516,7 +516,7 @@ class CommandProcessor:
             self.Debug(config)
      
     def Install(self, config):
-        if config.debug or config.all:    
+        if config.debug or config.full:    
             dbgPath = self._dumpSvc.DownloadDebugger(os.path.join(config.installpath, 'dbg'))
             if platform.system().lower() != 'windows':
                  os.chmod(dbgPath, stat.S_IEXEC)
@@ -524,7 +524,7 @@ class CommandProcessor:
             DumplingConfig.SaveSettings(config.configpath, { 'dbgpath': dbgPath })
             Output.Message('Debugger successfully installed')
 
-        if config.triage or config.all:
+        if config.triage or config.full:
             self._dumpSvc.DownloadClientFile('analysis.py', config.installpath)
             self._dumpSvc.DownloadClientFile('triage.ini', config.installpath)  
         
@@ -955,7 +955,7 @@ def _parse_args(argv):
 
     install_parser.add_argument('--triage', default=None, action='store_true', help='indicates that dumpling triage tooling should be installed on the client')     
  
-    install_parser.add_argument('--all', default=None, action='store_true', help='indicates that dumpling tools should be installed on the client') 
+    install_parser.add_argument('--full', default=None, action='store_true', help='indicates that all dumpling tools and scripting should be installed on the client') 
     
     install_parser.add_argument('--installpath', type=str, help='path to the root directory to install dumpling tooling')
 
