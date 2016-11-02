@@ -604,9 +604,12 @@ class CommandProcessor:
         
         dumpid = dumpdata['dumplingId']   
          
-        props = None if config.suppresstriage else CommandProcessor._get_client_triage_properties()
+        props = None if config.triage == 'none' else CommandProcessor._get_client_triage_properties()
 
         self.UpdateProperties(dumpid, config, props)
+
+        if config.triage == 'full':
+            self._triage_dump(dumpid, config.dumppath, config)
 
         requestpaths = set(dumpdata['refPaths'])      
         
@@ -767,6 +770,47 @@ class CommandProcessor:
         
         os.chdir(popdir)
 
+    def _triage_dump(self, dumpid, dumppath, config):  
+        if config.dbgpath is None:
+            Output.Critical('dbgpath must be specified either as an argument or in the dumpling config to preform a full dump triage')
+            return
+
+        scriptPath = os.path.join(config.installpath, 'analysis.py')
+
+        iniPath = os.path.join(config.installpath, 'triage.ini')
+
+        sosPath = os.path.join(os.path.dirname(config.dbgpath), 'libsosplugin.so') 
+        
+        #if the debugger or the triage tooling is not found error and return
+        if not os.path.isfile(scriptPath) or not os.path.isfile(iniPath) or not os.path.isfile(config.dbgpath):
+            Output.Critical('unable to find necissary debugger and triage tooling, please ensure these componenets are intalled')
+            return
+
+        triageOut = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
+
+        #define the debugger commands to execute
+        dbgcmds = []
+        dbgcmds.append('target create --core %s' % dumppath)
+        dbgcmds.append('plugin load %s' % sosPath)
+        dbgcmds.append('command script import %s' % scriptPath)
+        dbgcmds.append('analyze -i %s -o %s' % ( iniPath, triageOut ))
+        dbgcmds.append('exit')
+
+        #execute the debugger commands to triage the dump file
+        CommandProcessor._load_debugger(config.dbgpath, dbgcmds)
+
+        #load the output of analyze
+        with open(triageOut, 'r') as fTriage:
+            propsDict = json.load(fTriage)
+            
+            if len(propsDict) > 0: 
+                self._dumpSvc.UpdateDumpProperties(dumpid, propsDict) 
+        
+        #delete the temporary triage props file
+        os.remove(triageOut)
+            
+
+
     def _download_dump(self, dir, dumpManifest):
         dumplingDir = os.path.join(dir, dumpManifest['displayName'])
             
@@ -791,18 +835,38 @@ class CommandProcessor:
 
         return dumplingDir
     
-    @staticmethod
-    def _load_dump_in_debugger(debuggerPath, debuggerArgs):
+    @staticmethod         
+    #TODO: Replace this with _load_debugger after refactoring callers
+    def _load_dump_in_debugger(debuggerPath, debuggerCommands):
 
         procArgs = [ debuggerPath ]
 
-        procArgs.extend(debuggerArgs)
-                                                              
+        for dbgcmd in debuggerCommands:
+            procArgs.append('-o')
+            procArgs.append(dbgcmd)
+                           
         Output.Diagnostic('Debugger command:  %s'%(' '.join(procArgs)))
 
         dbgproc = subprocess.Popen(procArgs)
 
         dbgproc.wait()
+                  
+    @staticmethod
+    #TODO: This new method should replace the above _load_dump_in_debugger, however the callers of _load_dump_in_debugger must be
+    #      refactored to accomidate the slight difference in functionality.
+    def _load_debugger(debuggerPath, debuggerCommands):
+
+        procArgs = [ debuggerPath ]
+
+        for dbgcmd in debuggerCommands:
+            procArgs.append('-o')
+            procArgs.append(dbgcmd)
+                           
+        Output.Diagnostic('Debugger command:  %s'%(' '.join(procArgs)))
+
+        exitcode = subprocess.call(procArgs)
+
+        Output.Diagnostic('Debugger exit code %s' % exitcode)
     
     @staticmethod
     def _get_client_triage_properties():
@@ -917,7 +981,7 @@ def _parse_args(argv):
 
     upload_parser.add_argument('--user', type=str, default=getpass.getuser().lower(), help='The username to pass to the dumpling service.  This argument is ignored unless --dumppath is specified')
     
-    upload_parser.add_argument('--suppresstriage', default=False, action='store_true', help='supresses client side triage information from being uploadeded with the dump')
+    upload_parser.add_argument('--triage', choices=['none', 'client', 'full'], default='client', help='specifies the triage info to be uploadeded with the dump')
 
     upload_parser.add_argument('--incpaths', nargs='*', type=str, help='paths to files or directories to be included in the upload')
 
