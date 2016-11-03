@@ -407,6 +407,7 @@ class ThreadPool:
         self._availcount = 0
         self._queue = [ ]
         self._emptyevent = threading.Event()
+        self._emptyevent.set()
         self._maxthreads = maxthreads or ThreadPool.s_MaxThreads
     
     def queue_work(self, func, args=()):
@@ -855,18 +856,29 @@ class CommandProcessor:
     #TODO: This new method should replace the above _load_dump_in_debugger, however the callers of _load_dump_in_debugger must be
     #      refactored to accomidate the slight difference in functionality.
     def _load_debugger(debuggerPath, debuggerCommands):
-
-        procArgs = [ debuggerPath ]
+                                  
+        procArgs = [ str(debuggerPath) ]
 
         for dbgcmd in debuggerCommands:
             procArgs.append('-o')
-            procArgs.append(dbgcmd)
-                           
-        Output.Diagnostic('Debugger command:  %s'%(' '.join(procArgs)))
+            procArgs.append(str(dbgcmd))
+                     
+        dbgcmdline =  ' '.join(procArgs)   
+  
+        Output.Diagnostic('Debugger command: %s'%(dbgcmdline))
 
-        exitcode = subprocess.call(procArgs)
+        #BUG: For now we have disabled piping stdout b/c this seems to cause a segfault in lldb (even when executed directly in the shell)
+        #     this needs to be investigated and piping re-enabled so that we can properly filter this output
+        proc = subprocess.Popen(procArgs) #, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        
+        out, err = proc.communicate()
 
-        Output.Diagnostic('Debugger exit code %s' % exitcode)
+        returncode = proc.returncode
+
+        Output.Diagnostic(out)     
+
+        Output.Diagnostic('Debugger exit code %s' % returncode)
+
     
     @staticmethod
     def _get_client_triage_properties():
