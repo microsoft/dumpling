@@ -162,6 +162,8 @@
                 var table = context.appendChild(document.createElement("table"));
                 table.id = "current_table." + currentElement.id;
                 table.border = 1;
+                table.align = "left"
+                table.style.paddingLeft = 15;
 
                 for (var index in data["dumpid." + currentElement.id]) {
                     var row = table.appendChild(document.createElement("tr"));
@@ -179,8 +181,10 @@
                     // KEY
                     var keyChild = document.createElement("td");
                     keyChild.style.font = "#333232";
+                    keyChild.style.whiteSpace = 'pre-wrap';
                     keyChild.style.backgroundColor = "#d1ac87";
-                    keyChild.align = "center";
+                    keyChild.align = "left";
+                    keyChild.style.paddingLeft = 15;
                     row.appendChild(keyChild)
                         .appendChild(document.createTextNode(data["dumpid." + currentElement.id][index]));
 
