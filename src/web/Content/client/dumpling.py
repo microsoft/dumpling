@@ -360,6 +360,9 @@ class DumplingService:
     @staticmethod
     def _stream_file_from_response(response, path):
         FileUtils._ensure_parent_dir(path)
+        #if the file already exists delete it and replace
+        if os.path.isfile(path):
+            os.remove(path)
         with open(path, 'wb') as fd:
             for chunk in response.iter_content(1024*8):
                 fd.write(chunk)     
@@ -517,34 +520,17 @@ class CommandProcessor:
             self.Debug(config)
      
     def Install(self, config):
-        if config.debug or config.full:    
-            dbgPath = self._dumpSvc.DownloadDebugger(os.path.join(config.installpath, 'dbg'))
-            if platform.system().lower() != 'windows':
-                 os.chmod(dbgPath, stat.S_IEXEC)
-            Output.Message('Adding debugger settings dumpling config')
-            DumplingConfig.SaveSettings(config.configpath, { 'dbgpath': dbgPath })
-            Output.Message('Debugger successfully installed')
-
-        if config.triage or config.full:
-            self._dumpSvc.DownloadClientFile('analysis.py', config.installpath)
-            self._dumpSvc.DownloadClientFile('triage.ini', config.installpath)  
         
-        localdumplingpath = os.path.abspath(__file__)
+        #if the dumpling.py doesn't exist at the install path or update is specified
+        if not os.path.isfile(os.path.join('dumpling.py', config.installpath)) or config.update:  
+            self._dumpSvc.DownloadClientFile('dumpling.py', config.installpath) 
 
-        installdumplingpath = os.path.join(config.installpath, 'dumpling.py')
-
-        #copy dumpling.py to the install directory if it doesn't exist or the current file is newer
-        if not os.path.isfile(installdumplingpath) or os.path.getmtime(localdumplingpath) > os.path.getmtime(installdumplingpath):
-
-            shutil.copyfile(localdumplingpath, installdumplingpath)
-
-            #if we copied dumpling.py see if there is a dumpling.config.json next to it
-            localconfigpath = os.path.join(os.path.dirname(localdumplingpath), 'dumpling.config.json')
+            #if we're executing off a local copy of dumpling.py see if there is a dumpling.config.json next to it
             installconfigpath = os.path.join(config.installpath, 'dumpling.config.json')
 
-            if os.path.isfile(localconfigpath) and (not os.path.isfile(installconfigpath) or os.path.getmtime(localconfigpath) > os.path.getmtime(installconfigpath)):
-                
-                shutil.copyfile(localconfigpath, installconfigpath)
+            #if there is a dumpling config and no config is at the install location copy the file.
+            if os.path.isfile(config.configpath) and not os.path.isfile(installconfigpath):
+                shutil.copyfile(config.configpath, installconfigpath)
 
         if platform.system().lower() != 'windows':
             #create the shortcut link                      
@@ -554,6 +540,31 @@ class CommandProcessor:
                 with open(linkPath, 'w') as link:
                     link.write('#!/bin/sh\npython %s "$@"'%(installdumplingpath))
             
+        if config.full:    
+            dbgdir = os.path.join(config.installpath, 'dbg')
+
+            #if the dbg dir doesn't exist or update is specified
+            if not os.path.isdir(dbgdir) or config.update: 
+                
+                #if we are updating delete the entire dbg directory
+                if os.path.isdir(dbgdir):
+                    shutil.rmtree(dbgdir)
+
+                dbgPath = self._dumpSvc.DownloadDebugger(dbgdir)
+                if platform.system().lower() != 'windows':
+                     os.chmod(dbgPath, stat.S_IEXEC)
+                Output.Message('Adding debugger settings dumpling config')
+                DumplingConfig.SaveSettings(config.configpath, { 'dbgpath': dbgPath })
+                Output.Message('Debugger successfully installed')
+
+            #if the analysis.py doesn't exist or update is specified
+            if not os.path.isfile(os.path.join('analysis.py', config.installpath)) or config.update:
+                self._dumpSvc.DownloadClientFile('analysis.py', config.installpath) 
+            
+            #if the analysis.py doesn't exist or update is specified     
+            if not os.path.isfile(os.path.join('triage.ini', config.installpath)) or config.update:
+                self._dumpSvc.DownloadClientFile('triage.ini', config.installpath)  
+
     def Config(self, config):
         if config.action == 'dump':
             loaded = DumplingConfig.Load(config.configpath)
@@ -1027,12 +1038,10 @@ def _parse_args(argv):
     
     install_parser = subparsers.add_parser('install', parents=[sharedparser], help='command used for installing dumpling services and support tooling')
 
-    install_parser.add_argument('--debug', default=None, action='store_true', help='indicates that platform specific debugger should be installed on the client') 
-
-    install_parser.add_argument('--triage', default=None, action='store_true', help='indicates that dumpling triage tooling should be installed on the client')     
- 
     install_parser.add_argument('--full', default=None, action='store_true', help='indicates that all dumpling tools and scripting should be installed on the client') 
     
+    install_parser.add_argument('--update', default=False, action='store_true', help='indicates that already installed components should be updated')
+
     install_parser.add_argument('--installpath', type=str, help='path to the root directory to install dumpling tooling')
 
     debug_parser = subparsers.add_parser('debug', parents=[sharedparser], help='download a dumpling dump and load it into the debugger')   
