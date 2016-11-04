@@ -545,6 +545,11 @@ class CommandProcessor:
 
             #if the dbg dir doesn't exist or update is specified
             if not os.path.isdir(dbgdir) or config.update: 
+                
+                #if we are updating delete the entire dbg directory
+                if os.path.isdir(dbgdir):
+                    shutil.rmtree(dbgdir)
+
                 dbgPath = self._dumpSvc.DownloadDebugger(dbgdir)
                 if platform.system().lower() != 'windows':
                      os.chmod(dbgPath, stat.S_IEXEC)

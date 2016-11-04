@@ -240,8 +240,10 @@
     <Content Include="Scripts\bootstrap.js" />
     <Content Include="Scripts\bootstrap.min.js" />
     <Content Include="Content\client\triage.ini" />
+    <None Include="Properties\PublishProfiles\dumpling - Web Deploy.pubxml" />
     <None Include="Properties\PublishProfiles\dumpling-dev - Web Deploy %282%29.pubxml" />
     <None Include="Properties\PublishProfiles\dumpling-dev - Web Deploy.pubxml" />
+    <None Include="Properties\PublishProfiles\dumpling-prod Web Deploy.pubxml" />
     <None Include="Properties\PublishProfiles\dumpling.pubxml" />
     <None Include="Scripts\jquery-1.10.2.intellisense.js" />
     <Content Include="Scripts\jquery-1.10.2.js" />
