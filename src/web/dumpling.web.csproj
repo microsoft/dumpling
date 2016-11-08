@@ -241,6 +241,7 @@
     <Content Include="Scripts\bootstrap.min.js" />
     <Content Include="Content\client\triage.ini" />
     <None Include="Properties\PublishProfiles\dumpling - Web Deploy %282%29.pubxml" />
+    <None Include="Properties\PublishProfiles\dumpling - Web Deploy %283%29.pubxml" />
     <None Include="Properties\PublishProfiles\dumpling - Web Deploy.pubxml" />
     <None Include="Properties\PublishProfiles\dumpling-dev - Web Deploy %282%29.pubxml" />
     <None Include="Properties\PublishProfiles\dumpling-dev - Web Deploy.pubxml" />
