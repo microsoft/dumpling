@@ -538,7 +538,7 @@ class CommandProcessor:
             if not os.path.isfile(linkPath):
                 FileUtils._ensure_parent_dir(linkPath)
                 with open(linkPath, 'w') as link:
-                    link.write('#!/bin/sh\npython %s "$@"'%(installdumplingpath))
+                    link.write('#!/bin/sh\npython %s "$@"'%(os.path.join('dumpling.py', config.installpath)))
             
         if config.full:    
             dbgdir = os.path.join(config.installpath, 'dbg')
@@ -930,7 +930,7 @@ class DumplingConfig:
     @staticmethod
     def Load(strpath):           
         if not os.path.isfile(strpath):
-            return None
+            return DumplingConfig({ })
 
         try:
             with open(strpath, 'r') as fconfig:
