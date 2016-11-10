@@ -583,6 +583,7 @@ namespace dumpling.web.Controllers
             return hash;
 
         }
+
         private class DumpArtifactUploader : ArtifactUploader
         {
             private object _fileFormatReader;
