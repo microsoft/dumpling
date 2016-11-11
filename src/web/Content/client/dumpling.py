@@ -293,7 +293,9 @@ class DumplingService:
         DumplingService._stream_compressed_file_from_response(response, hash, downpath)
         
     def UploadDump(self, localpath, hash, origin, displayname, file):    
-        qargs = { 'hash': hash, 'localpath': localpath, 'origin': origin, 'displayname': displayname  }
+        dumplingid = self.CreateDump(hash, origin, displayname)
+
+        qargs = { 'hash': hash, 'localpath': localpath  }
 
         url = self._dumplingUri + 'api/dumplings/uploads?' + str(urllib.urlencode(qargs))
 
@@ -307,8 +309,27 @@ class DumplingService:
                     
         response.raise_for_status()
 
-        return response.json()
+        return { 'dumplingId' : hash, 'opToken' : response.text }
     
+    def CreateDump(self, hash, origin, displayname):
+        qargs = { 'hash': hash, 'user': origin, 'displayname': displayname  }
+
+        url = self._dumplingUri + 'api/dumplings/create?' + str(urllib.urlencode(qargs))
+        
+        Output.Message('creating dumpling dump %s'%(hash))
+
+        Output.Diagnostic('   url: %s'%(url))
+        
+        response = requests.get(url)
+                                     
+        Output.Diagnostic('   response: %s'%(response))
+                    
+        response.raise_for_status()
+
+        return { 'dumplingId' : hash, 'opToken' : response.text }
+
+
+
     def UpdateDumpProperties(self, dumplingid, dictProps):
         url = self._dumplingUri + 'api/dumplings/' + dumplingid + '/properties'
         
@@ -525,12 +546,6 @@ class CommandProcessor:
         if not os.path.isfile(os.path.join('dumpling.py', config.installpath)) or config.update:  
             self._dumpSvc.DownloadClientFile('dumpling.py', config.installpath) 
 
-            #if we're executing off a local copy of dumpling.py see if there is a dumpling.config.json next to it
-            installconfigpath = os.path.join(config.installpath, 'dumpling.config.json')
-
-            #if there is a dumpling config and no config is at the install location copy the file.
-            if os.path.isfile(config.configpath) and not os.path.isfile(installconfigpath):
-                shutil.copyfile(config.configpath, installconfigpath)
 
         if platform.system().lower() != 'windows':
             #create the shortcut link                      
@@ -564,6 +579,13 @@ class CommandProcessor:
             #if the analysis.py doesn't exist or update is specified     
             if not os.path.isfile(os.path.join('triage.ini', config.installpath)) or config.update:
                 self._dumpSvc.DownloadClientFile('triage.ini', config.installpath)  
+
+            #if we're executing off a local copy of dumpling.py see if there is a dumpling.config.json next to it
+            installconfigpath = os.path.join(config.installpath, 'dumpling.config.json')
+
+            #if there is a dumpling config and no config is at the install location copy the file.
+            if os.path.isfile(config.configpath) and not os.path.isfile(installconfigpath):
+                shutil.copyfile(config.configpath, installconfigpath)
 
     def Config(self, config):
         if config.action == 'dump':
@@ -623,7 +645,11 @@ class CommandProcessor:
         if config.triage == 'full':
             self._triage_dump(dumpid, config.dumppath, config)
 
-        requestpaths = set(dumpdata['refPaths'])      
+        #the paradigm of how uploading a dump works has changed.  Now that the dump is processed offline after the api 
+        #returns we get back an operation token rather than a list of needed refpaths.  In the future this optoken will fetch
+        #will be used in an api to check the opertions state, at that time we'll need to check the state then load the manifest 
+        #to look for needed files, however since this is not available yet we'll ignore the optoken.
+        requestpaths = set() #set(dumpdata['refPaths'])      
         
         incpaths = set()
           
@@ -880,13 +906,15 @@ class CommandProcessor:
 
         #BUG: For now we have disabled piping stdout b/c this seems to cause a segfault in lldb (even when executed directly in the shell)
         #     this needs to be investigated and piping re-enabled so that we can properly filter this output
-        proc = subprocess.Popen(procArgs) #, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        #proc = subprocess.Popen(procArgs, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         
-        out, err = proc.communicate()
+        #out, err = proc.communicate()
 
-        returncode = proc.returncode
+        #returncode = proc.returncode
 
-        Output.Diagnostic(out)     
+        #Output.Diagnostic(out)     
+
+        returncode = subprocess.call(procArgs);
 
         Output.Diagnostic('Debugger exit code %s' % returncode)
 

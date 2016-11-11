@@ -223,6 +223,8 @@
     <Compile Include="Startup.cs" />
     <Compile Include="Storage\ArtifactProcessor.cs" />
     <Compile Include="Storage\DumplingStorageClient.cs" />
+    <Compile Include="Storage\DumpProcessor.cs" />
+    <Compile Include="Storage\TaskHostExtensions.cs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Content\bootstrap-theme.css" />
