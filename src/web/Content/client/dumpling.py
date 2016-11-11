@@ -906,15 +906,15 @@ class CommandProcessor:
 
         #BUG: For now we have disabled piping stdout b/c this seems to cause a segfault in lldb (even when executed directly in the shell)
         #     this needs to be investigated and piping re-enabled so that we can properly filter this output
-        #proc = subprocess.Popen(procArgs, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(procArgs) #, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         
-        #out, err = proc.communicate()
+        out, err = proc.communicate()
 
-        #returncode = proc.returncode
+        returncode = proc.returncode
 
-        #Output.Diagnostic(out)     
+        Output.Diagnostic(out)     
 
-        returncode = subprocess.call(procArgs);
+        #returncode = subprocess.call(procArgs);
 
         Output.Diagnostic('Debugger exit code %s' % returncode)
 
