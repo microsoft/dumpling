@@ -280,6 +280,22 @@ namespace dumpling.web.Controllers
 
                 //check if the artifact already exists
                 artifact = await dumplingDb.Artifacts.FindAsync(cancelToken, hash);
+
+                if (artifact != null)
+                {
+                    //if the artifact already exists check to see if the dumpartifact already exists
+                    var dumpArtifact = await dumplingDb.DumpArtifacts.FindAsync(cancelToken, dumplingid, localpath);
+
+                    if (dumpArtifact == null)
+                    {
+                        //if the dumpartifact does not exist create and save it to the db
+                        dumpArtifact = new DumpArtifact() { DumpId = dumplingid, Hash = hash, Index = artifact.Indexes.FirstOrDefault()?.Index, LocalPath = localpath, ExecutableImage = false, DebugCritical = false };
+
+                        dumplingDb.DumpArtifacts.Add(dumpArtifact);
+
+                        await dumplingDb.SaveChangesAsync();
+                    }
+                }
             }
 
             //if the file doesn't already exist in the database we need to save it and index it

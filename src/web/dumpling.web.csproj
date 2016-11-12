@@ -25,7 +25,7 @@
     <UseGlobalApplicationHostFile />
     <NuGetPackageImportStamp>
     </NuGetPackageImportStamp>
-    <ApplicationInsightsResourceId>/subscriptions/06962174-fd78-47a2-9cf5-96d1e3975117/resourcegroups/raprg/providers/microsoft.insights/components/dotnetrp</ApplicationInsightsResourceId>
+    <ApplicationInsightsResourceId>/subscriptions/06962174-fd78-47a2-9cf5-96d1e3975117/resourcegroups/raprg/providers/microsoft.insights/components/dumpling</ApplicationInsightsResourceId>
     <TargetFrameworkProfile />
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
