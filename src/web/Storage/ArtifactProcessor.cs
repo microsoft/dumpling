@@ -12,6 +12,7 @@ using FileFormats;
 using FileFormats.ELF;
 using FileFormats.PE;
 using FileFormats.PDB;
+using System.Data.Entity.Migrations;
 using dumpling.web.telemetry;
 
 namespace dumpling.web.Storage
@@ -113,34 +114,22 @@ namespace dumpling.web.Storage
 
             if (DumpId != null)
             {
-                dumpArtifact = await _dumplingDb.DumpArtifacts.FindAsync(DumpId, LocalPath);
-
-                if (dumpArtifact == null)
+                dumpArtifact = new DumpArtifact()
                 {
-                    dumpArtifact = new DumpArtifact()
-                    {
-                        DumpId = DumpId,
-                        LocalPath = LocalPath,
-                        DebugCritical = DebugCritical
-                    };
+                    DumpId = DumpId,
+                    LocalPath = LocalPath,
+                    DebugCritical = DebugCritical,
+                    Index = artifact.Indexes.FirstOrDefault()?.Index
+                };
 
-                    _dumplingDb.DumpArtifacts.Add(dumpArtifact);
-                }
-
-                if (dumpArtifact.Index == null)
-                {
-                    dumpArtifact.Index = artifact.Indexes.FirstOrDefault()?.Index;
-                }
+                _dumplingDb.DumpArtifacts.AddOrUpdate(dumpArtifact);
 
                 await _dumplingDb.SaveChangesAsync();
-
             }
 
             //otherwise create the file entry in the db
             await _dumplingDb.AddArtifactAsync(artifact);
-
-            await _dumplingDb.SaveChangesAsync();
-
+            
             await _dumplingDb.Entry(artifact).GetDatabaseValuesAsync();
 
             using (var compressed = File.OpenRead(_path))

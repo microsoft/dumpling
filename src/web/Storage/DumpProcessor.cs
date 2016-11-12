@@ -9,6 +9,8 @@ using FileFormats.ELF;
 using FileFormats;
 using FileFormats.Minidump;
 using FileFormats.MachO;
+using System.Data.Entity.Migrations;
+using dumpling.web.telemetry;
 
 namespace dumpling.web.Storage
 {
@@ -52,55 +54,47 @@ namespace dumpling.web.Storage
 
         protected override async Task StoreArtifactAsync()
         {
-            await base.StoreArtifactAsync();
+            try
+            {
+                await base.StoreArtifactAsync();
 
-            //update the dump properties
-            var dump = await _dumplingDb.Dumps.FindAsync(DumpId);
-            
-            dump.Os = DumpOS;
+                //update the dump properties
+                var dump = await _dumplingDb.Dumps.FindAsync(DumpId);
 
-            await _dumplingDb.SaveChangesAsync();
+                dump.Os = DumpOS;
 
-            //store the dump artifacts for the loaded modules as well
-            await StoreLoadedModulesAsync();
+                await _dumplingDb.SaveChangesAsync();
+
+                //store the dump artifacts for the loaded modules as well
+                await StoreLoadedModulesAsync();
+            }
+            catch (Exception e) when (Telemetry.TrackExceptionFilter(e)) { }
         }
 
         private async Task StoreLoadedModulesAsync()
         {
-            IList<DumpArtifact> loadedModules;
-
-            switch (this.Format)
+            try
             {
-                case "elfcore":
-                    loadedModules = ReadELFCoreLoadedModules(DumpId);
-                    break;
-                default:
-                    loadedModules = new DumpArtifact[] { };
-                    break;
-            }
+                IList<DumpArtifact> loadedModules;
 
-            foreach(var dumpArt in loadedModules)
-            {
-                //see if the dump artifact entry already exists
-                var preexisting = await _dumplingDb.DumpArtifacts.FindAsync(DumpId, LocalPath);
-
-
-                //if it already exists update it
-                if(preexisting != null)
+                switch (this.Format)
                 {
-                    await _dumplingDb.Entry(preexisting).ReloadAsync();
-                    preexisting.Index = dumpArt.Index;
-                    preexisting.ExecutableImage = dumpArt.ExecutableImage;
-                    preexisting.DebugCritical = dumpArt.DebugCritical;
-                }
-                //otherwise add it to the db
-                else
-                {
-                    _dumplingDb.DumpArtifacts.Add(dumpArt);
+                    case "elfcore":
+                        loadedModules = ReadELFCoreLoadedModules(DumpId);
+                        break;
+                    default:
+                        loadedModules = new DumpArtifact[] { };
+                        break;
                 }
 
-                await _dumplingDb.SaveChangesAsync();
+                foreach (var dumpArt in loadedModules)
+                {
+                    _dumplingDb.DumpArtifacts.AddOrUpdate(dumpArt);
+
+                    await _dumplingDb.SaveChangesAsync();
+                }
             }
+            catch (Exception e) when (Telemetry.TrackExceptionFilter(e)) { }
         }
 
         private IList<DumpArtifact> ReadELFCoreLoadedModules(string dumpId)

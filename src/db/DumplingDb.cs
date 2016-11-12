@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Data.Entity.Infrastructure;
+using System.Data.SqlClient;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -20,6 +22,53 @@ namespace dumpling.db
         public DbSet<Failure> Failures { get; set; }
         
         public DbSet<Property> Properties { get; set; }
+
+        public async Task<DumpArtifact> GetOrAddAsync(DumpArtifact dumpArtifact)
+        {
+            return await this.GetOrAddAsync(this.DumpArtifacts, dumpArtifact, dumpArtifact.DumpId, dumpArtifact.LocalPath);
+        }
+
+        private async Task<T> GetOrAddAsync<T>(DbSet<T> dbSet, T entity, params object[] keys)
+            where T : class
+        {
+            if (this.ChangeTracker.HasChanges())
+            {
+                throw new InvalidOperationException("Pending changes detected in the current context.  GetOrAdd makes transactional changes to the context and database and can only be called on a context with no pending changes.");
+            }
+
+            //try to get find the value first
+            T ret = await dbSet.FindAsync(keys);
+
+            if(ret == null)
+            {
+                try
+                {
+                    dbSet.Add(entity);
+
+                    await this.SaveChangesAsync();
+
+                    ret = entity;
+                }
+                catch (DbUpdateException e) when (IsUniqueViolationException(e))
+                {
+                    dbSet.Remove(entity);
+
+                    ret = await dbSet.FindAsync(keys);
+                }
+            }
+
+            await this.Entry<T>(ret).GetDatabaseValuesAsync();
+
+            return ret;
+        }
+
+        private bool IsUniqueViolationException(DbUpdateException e)
+        {
+            var sqlEx = e.InnerException as SqlException;
+
+
+            return sqlEx != null && sqlEx.Errors.OfType<SqlError>().Any(se => se.Number == 2601 || se.Number == 2627 /* PK/UKC violation */);
+        }
 
         public async Task AddArtifactAsync(Artifact artifact)
         {
