@@ -210,6 +210,8 @@ namespace dumpling.web.Controllers
         [HttpPost]
         public async Task<string> UploadDump([FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
         {
+            var optoken = GetOperationToken();
+
             //if the specified hash is not formatted properly throw an exception
             if (!ValidateHashFormat(hash))
             {
@@ -217,8 +219,6 @@ namespace dumpling.web.Controllers
             }
 
             Artifact artifact = null;
-
-            var optoken = GetOperationToken();
 
             using (DumplingDb dumplingDb = new DumplingDb())
             {
@@ -244,7 +244,7 @@ namespace dumpling.web.Controllers
                     tempPath = await UploadContentStreamToFile(contentStream, optoken, hash, Path.GetFileName(localpath).ToLowerInvariant());
                 }
 
-                var processor = new DumpProcessor(HttpContext.Current.Server.MapPath("~/App_Data/temp"), tempPath, hash, hash, localpath);
+                var processor = new DumpProcessor(optoken, HttpContext.Current.Server.MapPath("~/App_Data/temp"), tempPath, hash, hash, localpath);
 
                 //begin processing but return before complete this requires the task to be registered to 
                 //prevent pre-emptive appdomain shutdown
@@ -258,6 +258,8 @@ namespace dumpling.web.Controllers
         [HttpPost]
         public async Task<string> UploadArtifact(string dumplingid, [FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
         {
+            var optoken = GetOperationToken();
+
             //if the specified hash is not formatted properly throw an exception
             if (!ValidateHashFormat(hash))
             {
@@ -265,8 +267,6 @@ namespace dumpling.web.Controllers
             }
 
             Artifact artifact = null;
-
-            var optoken = GetOperationToken();
 
             using (DumplingDb dumplingDb = new DumplingDb())
             {
@@ -292,7 +292,7 @@ namespace dumpling.web.Controllers
                     tempPath = await UploadContentStreamToFile(contentStream, optoken, hash, Path.GetFileName(localpath).ToLowerInvariant());
                 }
 
-                var processor = new ArtifactProcessor(HttpContext.Current.Server.MapPath("~/App_Data/temp"), tempPath, hash, dumplingid, localpath, false);
+                var processor = new ArtifactProcessor(optoken, HttpContext.Current.Server.MapPath("~/App_Data/temp"), tempPath, hash, dumplingid, localpath, false);
 
                 //begin processing but return before complete this requires the task to be registered to 
                 //prevent pre-emptive appdomain shutdown
@@ -306,13 +306,13 @@ namespace dumpling.web.Controllers
         [HttpPost]
         public async Task<string> UploadArtifact([FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
         {
+            var optoken = GetOperationToken();
+
             //if the specified hash is not formatted properly throw an exception
             if (!ValidateHashFormat(hash))
             {
                 throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified hash is improperly formatted"));
             }
-
-            var optoken = GetOperationToken();
 
             Artifact artifact = null;
 
@@ -332,7 +332,7 @@ namespace dumpling.web.Controllers
                     tempPath = await UploadContentStreamToFile(contentStream, optoken, hash, Path.GetFileName(localpath).ToLowerInvariant());
                 }
 
-                var processor = new ArtifactProcessor(HttpContext.Current.Server.MapPath("~/App_Data/temp"), tempPath, hash);
+                var processor = new ArtifactProcessor(optoken, HttpContext.Current.Server.MapPath("~/App_Data/temp"), tempPath, hash);
 
                 //begin processing but return before complete this requires the task to be registered to 
                 //prevent pre-emptive appdomain shutdown

@@ -136,6 +136,9 @@ DocProject/Help/html
 # Click-Once directory
 publish/
 
+#ASP Data directory
+/src/web/App_Data
+
 # Publish Web Output
 *.[Pp]ublish.xml
 *.azurePubxml

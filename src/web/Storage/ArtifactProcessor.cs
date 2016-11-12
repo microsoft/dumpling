@@ -12,6 +12,7 @@ using FileFormats;
 using FileFormats.ELF;
 using FileFormats.PE;
 using FileFormats.PDB;
+using dumpling.web.telemetry;
 
 namespace dumpling.web.Storage
 {
@@ -20,10 +21,12 @@ namespace dumpling.web.Storage
         protected string _path;
         protected DumplingDb _dumplingDb;
         protected string _localRoot;
+        protected string _optoken;
         
 
-        public ArtifactProcessor(string localRoot, string path, string expectedHash, string dumpId = null, string localPath = null, bool debugCritical = false )
+        public ArtifactProcessor(string optoken, string localRoot, string path, string expectedHash, string dumpId = null, string localPath = null, bool debugCritical = false )
         {
+            _optoken = optoken;
             _localRoot = localRoot;
             _path = path;
             ExpectedHash = expectedHash;
@@ -75,17 +78,15 @@ namespace dumpling.web.Storage
                         Size = decompressed.Length;
 
                         ProcessDecompressedFile(decompressed);
-                    }
 
-                    await StoreArtifactAsync();
+                        await StoreArtifactAsync();
+                    }
 
                     File.Delete(_path);
                 }
             }
-            catch (Exception e)
+            catch (Exception e) when (Telemetry.TrackExceptionFilter(e))
             {
-                //need to do some loggin here
-                throw e;
             }
         }
 
@@ -122,13 +123,17 @@ namespace dumpling.web.Storage
                         LocalPath = LocalPath,
                         DebugCritical = DebugCritical
                     };
-                    
+
+                    _dumplingDb.DumpArtifacts.Add(dumpArtifact);
                 }
 
                 if (dumpArtifact.Index == null)
                 {
                     dumpArtifact.Index = artifact.Indexes.FirstOrDefault()?.Index;
                 }
+
+                await _dumplingDb.SaveChangesAsync();
+
             }
 
             //otherwise create the file entry in the db
@@ -144,13 +149,7 @@ namespace dumpling.web.Storage
                 artifact.Url = await DumplingStorageClient.StoreArtifactAsync(compressed, Hash, CompressedFileName);
             }
 
-            if(dumpArtifact != null && dumpArtifact.Hash != artifact.Hash)
-            {
-                dumpArtifact.Hash = artifact.Hash;
-            }
-
             await _dumplingDb.SaveChangesAsync();
-
         }
 
         protected virtual void ProcessDecompressedFile(Stream decompressed)

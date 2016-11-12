@@ -16,8 +16,8 @@ namespace dumpling.web.Storage
     {
         private object _fileFormatReader;
 
-        public DumpProcessor(string localRoot, string path, string expectedHash, string dumpId, string localPath) 
-            : base(localRoot, path, expectedHash, dumpId, localPath, true)
+        public DumpProcessor(string optoken, string localRoot, string path, string expectedHash, string dumpId, string localPath) 
+            : base(optoken, localRoot, path, expectedHash, dumpId, localPath, true)
         {
 
         }
@@ -84,9 +84,11 @@ namespace dumpling.web.Storage
                 //see if the dump artifact entry already exists
                 var preexisting = await _dumplingDb.DumpArtifacts.FindAsync(DumpId, LocalPath);
 
+
                 //if it already exists update it
                 if(preexisting != null)
                 {
+                    await _dumplingDb.Entry(preexisting).ReloadAsync();
                     preexisting.Index = dumpArt.Index;
                     preexisting.ExecutableImage = dumpArt.ExecutableImage;
                     preexisting.DebugCritical = dumpArt.DebugCritical;
