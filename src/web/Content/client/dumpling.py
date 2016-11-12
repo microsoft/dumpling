@@ -837,18 +837,22 @@ class CommandProcessor:
         #execute the debugger commands to triage the dump file
         CommandProcessor._load_debugger(config.dbgpath, dbgcmds)
 
-        #load the output of analyze
-        with open(triageOut, 'r') as fTriage:
-            propsDict = json.load(fTriage)
+        #if the debugger wrote out the triage output file as expected load it and update the dump properties
+        if os.path.isfile(triageOut):
+            #load the output of analyze
+            with open(triageOut, 'r') as fTriage:
+                propsDict = json.load(fTriage)
             
-            if len(propsDict) > 0: 
-                self._dumpSvc.UpdateDumpProperties(dumpid, propsDict) 
+                if len(propsDict) > 0: 
+                    self._dumpSvc.UpdateDumpProperties(dumpid, propsDict) 
         
-        #delete the temporary triage props file
-        os.remove(triageOut)
+            #delete the temporary triage props file
+            os.remove(triageOut)
+        #if the debugger did not write the triage output file message and return
+        else:
+            Output.Message('WARNING: Debugger triage analysis failed')
+
             
-
-
     def _download_dump(self, dir, dumpManifest):
         dumplingDir = os.path.join(dir, dumpManifest['displayName'])
             
