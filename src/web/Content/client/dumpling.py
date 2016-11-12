@@ -655,6 +655,8 @@ class CommandProcessor:
           
         if not (config.incpaths is None or len(config.incpaths) == 0):
             incpaths = FileUtils._enumerate_unique_files(config.incpaths)
+            #if the dump file is in the incpaths remove it as it has already been uploaded
+            incpaths.discard(path.abspath(config.dumppath))
             requestpaths.difference_update(incpaths)
 
         if len(requestpaths) > 0:
