@@ -14,6 +14,7 @@ using FileFormats.PE;
 using FileFormats.PDB;
 using System.Data.Entity.Migrations;
 using dumpling.web.telemetry;
+using System.Diagnostics;
 
 namespace dumpling.web.Storage
 {
@@ -63,6 +64,18 @@ namespace dumpling.web.Storage
 
         public async Task ProcessAsync()
         {
+            var stopwatch = Stopwatch.StartNew();
+
+            var telemProperties = new Dictionary<string, string>()
+                {
+                    { "Hash", ExpectedHash },
+                    { "FileName", FileName },
+                    { "DumpId", DumpId },
+                    { "OperationToken", _optoken },
+                };
+
+            Telemetry.Client.TrackEvent(this.GetType().Name + "_Started", telemProperties);
+
             try
             {
                 using (_dumplingDb = new DumplingDb())
@@ -84,11 +97,27 @@ namespace dumpling.web.Storage
                     }
 
                     File.Delete(_path);
+
+                    stopwatch.Stop();
+
+                    Telemetry.Client.TrackEvent(this.GetType().Name + "_Completed", telemProperties, new Dictionary<string, double>() { { "ProcessingTime", Convert.ToDouble(stopwatch.ElapsedMilliseconds) } });
                 }
             }
-            catch (Exception e) when (Telemetry.TrackExceptionFilter(e))
+            catch (Exception e)
             {
+                Telemetry.Client.TrackException(e, telemProperties);
             }
+
+        }
+
+        protected virtual void OnBeforeProcess(Dictionary<string, string> telemProperties, Dictionary<string, double> metrics)
+        {
+            Telemetry.Client.TrackEvent("ArtifactProcessing_Started", telemProperties, metrics);
+        }
+
+        protected virtual void OnAfterProcess(Dictionary<string, string> telemProperties, Dictionary<string, double> metrics)
+        {
+            Telemetry.Client.TrackEvent("ArtifactProcessing_Completed", telemProperties, metrics);
         }
 
         protected virtual async Task StoreArtifactAsync()
@@ -127,18 +156,18 @@ namespace dumpling.web.Storage
                 await _dumplingDb.SaveChangesAsync();
             }
 
-            //otherwise create the file entry in the db
-            await _dumplingDb.AddArtifactAsync(artifact);
-            
-            await _dumplingDb.Entry(artifact).GetDatabaseValuesAsync();
-
-            using (var compressed = File.OpenRead(_path))
+            //AddArtifactAsync will return true if the artifact was added or false if the artifact already existed
+            //if the artifact was added upload the file and set the url of the artifact
+            if (await _dumplingDb.AddArtifactAsync(artifact))
             {
-                //upload the artifact to blob storage
-                artifact.Url = await DumplingStorageClient.StoreArtifactAsync(compressed, Hash, CompressedFileName);
-            }
+                using (var compressed = File.OpenRead(_path))
+                {
+                    //upload the artifact to blob storage
+                    artifact.Url = await DumplingStorageClient.StoreArtifactAsync(compressed, Hash, CompressedFileName);
+                }
 
-            await _dumplingDb.SaveChangesAsync();
+                await _dumplingDb.SaveChangesAsync();
+            }
         }
 
         protected virtual void ProcessDecompressedFile(Stream decompressed)

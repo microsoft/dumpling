@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Data.Entity.Core;
 using System.Data.Entity.Infrastructure;
 using System.Data.SqlClient;
 using System.Linq;
@@ -23,12 +24,17 @@ namespace dumpling.db
         
         public DbSet<Property> Properties { get; set; }
 
-        public async Task<DumpArtifact> GetOrAddAsync(DumpArtifact dumpArtifact)
+        public async Task<DumpArtifact> TryAddAsync(DumpArtifact dumpArtifact)
         {
-            return await this.GetOrAddAsync(this.DumpArtifacts, dumpArtifact, dumpArtifact.DumpId, dumpArtifact.LocalPath);
+            return await this.TryAddAsync(this.DumpArtifacts, dumpArtifact, dumpArtifact.DumpId, dumpArtifact.LocalPath);
         }
 
-        private async Task<T> GetOrAddAsync<T>(DbSet<T> dbSet, T entity, params object[] keys)
+        public async Task<Artifact> TryAddAsync(Artifact artifact)
+        {
+            return await this.TryAddAsync(this.Artifacts, artifact, artifact.Hash);
+        }
+
+        private async Task<T> TryAddAsync<T>(DbSet<T> dbSet, T entity, params object[] keys)
             where T : class
         {
             if (this.ChangeTracker.HasChanges())
@@ -64,21 +70,23 @@ namespace dumpling.db
 
         private bool IsUniqueViolationException(DbUpdateException e)
         {
+            var ex = (Exception)(e.InnerException as UpdateException) ?? (Exception)e;
+
             var sqlEx = e.InnerException as SqlException;
-
-
+            
             return sqlEx != null && sqlEx.Errors.OfType<SqlError>().Any(se => se.Number == 2601 || se.Number == 2627 /* PK/UKC violation */);
         }
 
-        public async Task AddArtifactAsync(Artifact artifact)
+        public async Task<bool> AddArtifactAsync(Artifact artifact)
         {
-            this.Artifacts.Add(artifact);
+            if (await this.TryAddAsync(artifact) == artifact)
+            {
+                await UpdateIncompleteDumpArtifacts(artifact);
 
-            await this.SaveChangesAsync();
+                return true;
+            }
 
-            await this.Entry(artifact).ReloadAsync();
-
-            await UpdateIncompleteDumpArtifacts(artifact);
+            return false;
         }
 
         public IEnumerable<Dump> FindDumps(DateTime startTime, DateTime endTime, Dictionary<string, string> propertyDictionary)
