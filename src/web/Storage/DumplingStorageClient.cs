@@ -72,5 +72,12 @@ namespace dumpling.web.Storage
 
             return blob.Uri.ToString();
         }
+
+        public static async Task<bool> DeleteArtifactAsync(string hash, string fileName)
+        {
+            var blob = _instance._artifactContainer.GetBlockBlobReference(hash + "/" + fileName);
+            
+            return await blob.DeleteIfExistsAsync();
+        }
     }
 }

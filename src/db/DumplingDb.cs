@@ -63,7 +63,7 @@ namespace dumpling.db
                 }
             }
 
-            await this.Entry<T>(ret).GetDatabaseValuesAsync();
+            await this.Entry<T>(ret).ReloadAsync();
 
             return ret;
         }
@@ -88,6 +88,17 @@ namespace dumpling.db
 
             return false;
         }
+
+        public async Task<bool> DeleteArtifactAsync(string hash)
+        {
+            int recordsAffected = await this.Database.ExecuteSqlCommandAsync(DUMPARTIFACT_UNLINK_UPDATE_QUERY, hash);
+
+            recordsAffected += await this.Database.ExecuteSqlCommandAsync(ARTIFACTINDEX_DELETE_QUERY, hash);
+
+            recordsAffected += await this.Database.ExecuteSqlCommandAsync(ARTIFACT_DELETE_QUERY, hash);
+
+            return recordsAffected > 0;
+        } 
 
         public IEnumerable<Dump> FindDumps(DateTime startTime, DateTime endTime, Dictionary<string, string> propertyDictionary)
         {
@@ -156,7 +167,11 @@ namespace dumpling.db
                 await this.Database.ExecuteSqlCommandAsync(DUMPARTIFACT_UPDATE_QUERY, artifact.Hash, index.Index);
             }
         }
-
+        
         private const string DUMPARTIFACT_UPDATE_QUERY = "UPDATE [DumpArtifacts] SET [Hash] = @p0 WHERE [Index] = @p1";
+
+        private const string DUMPARTIFACT_UNLINK_UPDATE_QUERY = "UPDATE [DumpArtifacts] SET [Hash] = NULL WHERE [Hash] = @p0";
+        private const string ARTIFACTINDEX_DELETE_QUERY = "DELETE FROM [ArtifactIndexes] WHERE [Hash] = @p0";
+        private const string ARTIFACT_DELETE_QUERY = "DELETE FROM [Artifacts] WHERE [Hash] = @p0";
     }
 }

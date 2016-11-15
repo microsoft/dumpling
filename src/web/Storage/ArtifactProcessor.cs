@@ -80,64 +80,72 @@ namespace dumpling.web.Storage
             {
                 using (_dumplingDb = new DumplingDb())
                 {
-                    FileName = Path.GetFileName(_path).ToLowerInvariant();
+                    var artifact = await CreateArtifactAsync();
 
-                    using (Stream decompressed = await DecompAndHashAsync())
+                    if (artifact != null)
                     {
-                        if (Hash != ExpectedHash)
+                        using (Stream decompressed = await DecompAndHashAsync())
                         {
-                            throw new ArgumentException("The given hash did not match the SHA1 hash of the uploaded file.");
+                            if (Hash == ExpectedHash)
+                            {
+                                Size = decompressed.Length;
+
+                                ProcessDecompressedFile(decompressed);
+
+                                await UpdateArtifactAsync(artifact);
+                            }
+                            else
+                            {
+
+                                telemProperties["ProcessingState"] = "failed_validation";
+                                
+                                await DeleteArtifactAsync(artifact);
+                            }
+
                         }
-
-                        Size = decompressed.Length;
-
-                        ProcessDecompressedFile(decompressed);
-
-                        await StoreArtifactAsync();
                     }
 
-                    File.Delete(_path);
-
-                    stopwatch.Stop();
-
-                    Telemetry.Client.TrackEvent(this.GetType().Name + "_Completed", telemProperties, new Dictionary<string, double>() { { "ProcessingTime", Convert.ToDouble(stopwatch.ElapsedMilliseconds) } });
+                    telemProperties["ProcessingState"] = "success";
                 }
             }
             catch (Exception e)
             {
+                telemProperties["ProcessingState"] = "failed_exception";
+
+                telemProperties["Exception"] = e.ToString();
+
                 Telemetry.Client.TrackException(e, telemProperties);
             }
 
-        }
+            File.Delete(_path);
 
-        protected virtual void OnBeforeProcess(Dictionary<string, string> telemProperties, Dictionary<string, double> metrics)
-        {
-            Telemetry.Client.TrackEvent("ArtifactProcessing_Started", telemProperties, metrics);
-        }
+            stopwatch.Stop();
 
-        protected virtual void OnAfterProcess(Dictionary<string, string> telemProperties, Dictionary<string, double> metrics)
-        {
-            Telemetry.Client.TrackEvent("ArtifactProcessing_Completed", telemProperties, metrics);
-        }
+            Telemetry.Client.TrackEvent(this.GetType().Name + "_Completed", telemProperties, new Dictionary<string, double>() { { "ProcessingTime", Convert.ToDouble(stopwatch.ElapsedMilliseconds) } });
 
-        protected virtual async Task StoreArtifactAsync()
+            Telemetry.Client.Flush();
+
+            // Allow some time for flushing before shutdown.
+            await Task.Delay(1000);
+        }
+        
+        protected virtual async Task<Artifact> CreateArtifactAsync()
         {
+            FileName = Path.GetFileName(_path).ToLowerInvariant();
+
+            CompressedSize = new FileInfo(_path).Length;
+
             var artifact = new Artifact
             {
-                Hash = Hash,
-                Uuid = Uuid,
-                Format = Format,
+                Hash = ExpectedHash,
                 FileName = FileName,
-                Size = Size,
+                Format = ArtifactFormat.Unknown,
                 CompressedSize = CompressedSize,
                 UploadTime = DateTime.UtcNow
             };
 
-            if (Index != null)
-            {
-                artifact.Indexes.Add(new ArtifactIndex() { Index = Index, Hash = Hash });
-            }
-
+            bool newArtifact = await _dumplingDb.TryAddAsync(artifact) == artifact;
+            
             DumpArtifact dumpArtifact = null;
 
 
@@ -147,27 +155,54 @@ namespace dumpling.web.Storage
                 {
                     DumpId = DumpId,
                     LocalPath = LocalPath,
-                    DebugCritical = DebugCritical,
-                    Index = artifact.Indexes.FirstOrDefault()?.Index
+                    DebugCritical = DebugCritical
                 };
 
                 _dumplingDb.DumpArtifacts.AddOrUpdate(dumpArtifact);
-
-                await _dumplingDb.SaveChangesAsync();
             }
 
-            //AddArtifactAsync will return true if the artifact was added or false if the artifact already existed
-            //if the artifact was added upload the file and set the url of the artifact
-            if (await _dumplingDb.AddArtifactAsync(artifact))
+            await _dumplingDb.SaveChangesAsync();
+
+            if (newArtifact)
             {
-                using (var compressed = File.OpenRead(_path))
-                {
-                    //upload the artifact to blob storage
-                    artifact.Url = await DumplingStorageClient.StoreArtifactAsync(compressed, Hash, CompressedFileName);
-                }
-
-                await _dumplingDb.SaveChangesAsync();
+                //upload the artifact to blob storage
+                await StoreArtifactBlobAsync(artifact);
             }
+
+            return newArtifact ? artifact : null;
+        }
+
+        protected virtual async Task DeleteArtifactAsync(Artifact artifact)
+        {
+            await DumplingStorageClient.DeleteArtifactAsync(artifact.Hash, artifact.FileName);
+
+            await _dumplingDb.DeleteArtifactAsync(artifact.Hash);
+        }
+
+        protected virtual async Task StoreArtifactBlobAsync(Artifact artifact)
+        {
+            using (var compressed = File.OpenRead(_path))
+            {
+                //upload the artifact to blob storage
+                artifact.Url = await DumplingStorageClient.StoreArtifactAsync(compressed, Hash, CompressedFileName);
+            }
+
+            await _dumplingDb.SaveChangesAsync();
+
+        }
+
+        protected virtual async Task UpdateArtifactAsync(Artifact artifact)
+        {
+            artifact.Uuid = Uuid;
+            artifact.Format = Format;
+            artifact.Size = Size;
+            
+            if (Index != null)
+            {
+                artifact.Indexes.Add(new ArtifactIndex() { Index = Index, Hash = Hash });
+            }
+            
+            await _dumplingDb.SaveChangesAsync();
         }
 
         protected virtual void ProcessDecompressedFile(Stream decompressed)

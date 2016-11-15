@@ -21,7 +21,7 @@ namespace dumpling.web.Storage
         public DumpProcessor(string optoken, string localRoot, string path, string expectedHash, string dumpId, string localPath) 
             : base(optoken, localRoot, path, expectedHash, dumpId, localPath, true)
         {
-
+            this.DebugCritical = true;
         }
 
         public string DumpOS { get; private set; }
@@ -52,11 +52,11 @@ namespace dumpling.web.Storage
             Index = BuildIndexFromModuleUUID(Hash, IndexPrefix.SHA1, FileName);
         }
 
-        protected override async Task StoreArtifactAsync()
+        protected override async Task UpdateArtifactAsync(Artifact artifact)
         {
             try
             {
-                await base.StoreArtifactAsync();
+                await base.UpdateArtifactAsync(artifact);
 
                 //update the dump properties
                 var dump = await _dumplingDb.Dumps.FindAsync(DumpId);
@@ -66,12 +66,12 @@ namespace dumpling.web.Storage
                 await _dumplingDb.SaveChangesAsync();
 
                 //store the dump artifacts for the loaded modules as well
-                await StoreLoadedModulesAsync();
+                await AddLoadedModulesAsync();
             }
             catch (Exception e) when (Telemetry.TrackExceptionFilter(e)) { }
         }
 
-        private async Task StoreLoadedModulesAsync()
+        private async Task AddLoadedModulesAsync()
         {
             try
             {
