@@ -1,17 +1,20 @@
 ﻿using dumpling.db;
 using dumpling.web.Storage;
+using dumpling.web.telemetry;
 using FileFormats;
 using FileFormats.ELF;
 using FileFormats.MachO;
 using FileFormats.Minidump;
 using FileFormats.PDB;
 using FileFormats.PE;
+using Microsoft.ApplicationInsights.Extensibility.Implementation;
 using Microsoft.WindowsAzure.Storage.Blob;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity.Infrastructure;
+using System.Data.Entity.Migrations;
 using System.Data.Entity.Validation;
 using System.IO;
 using System.IO.Compression;
@@ -210,152 +213,27 @@ namespace dumpling.web.Controllers
         [HttpPost]
         public async Task<string> UploadDump([FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
         {
-            var optoken = GetOperationToken();
+            await StoreArtifactContentAsync(this.Request.Content, hash, hash, localpath, cancelToken);
 
-            //if the specified hash is not formatted properly throw an exception
-            if (!ValidateHashFormat(hash))
-            {
-                throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified hash is improperly formatted"));
-            }
-
-            Artifact artifact = null;
-
-            using (DumplingDb dumplingDb = new DumplingDb())
-            {
-                var dumpling = await dumplingDb.Dumps.FindAsync(cancelToken, hash);
-
-                if (dumpling == null)
-                {
-                    throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified dump was not found, call CreateDump to create it."));
-                }
-
-                //check if the dumpfile artifact already exists
-                artifact = await dumplingDb.Artifacts.FindAsync(cancelToken, hash);
-
-            }
-
-            //if the file doesn't already exist in the database we need to save it and index it
-            if (artifact == null)
-            {
-                string tempPath = null;
-
-                using (var contentStream = await Request.Content.ReadAsStreamAsync())
-                {
-                    tempPath = await UploadContentStreamToFile(contentStream, optoken, hash, Path.GetFileName(localpath).ToLowerInvariant());
-                }
-
-                var processor = new DumpProcessor(optoken, HttpContext.Current.Server.MapPath("~/App_Data/temp"), tempPath, hash, hash, localpath);
-
-                //begin processing but return before complete this requires the task to be registered to 
-                //prevent pre-emptive appdomain shutdown
-                Task bgProcessing = Task.Factory.StartNew(processor.ProcessAsync).RegisterWithHost();
-            }
-
-            return optoken;
+            return hash;
         }
 
         [Route("api/dumplings/{dumplingid}/artifacts/uploads/")]
         [HttpPost]
         public async Task<string> UploadArtifact(string dumplingid, [FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
         {
-            var optoken = GetOperationToken();
+            await StoreArtifactContentAsync(this.Request.Content, hash, dumplingid, localpath, cancelToken);
 
-            //if the specified hash is not formatted properly throw an exception
-            if (!ValidateHashFormat(hash))
-            {
-                throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified hash is improperly formatted"));
-            }
-
-            Artifact artifact = null;
-
-            using (DumplingDb dumplingDb = new DumplingDb())
-            {
-                var dumpling = await dumplingDb.Dumps.FindAsync(cancelToken, dumplingid);
-
-                //if the specified dump was not found throw an exception 
-                if (dumpling == null)
-                {
-                    throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The given dumplingId is invalid"));
-                }
-
-                //check if the artifact already exists
-                artifact = await dumplingDb.Artifacts.FindAsync(cancelToken, hash);
-
-                if (artifact != null)
-                {
-                    //if the artifact already exists check to see if the dumpartifact already exists
-                    var dumpArtifact = await dumplingDb.DumpArtifacts.FindAsync(cancelToken, dumplingid, localpath);
-
-                    if (dumpArtifact == null)
-                    {
-                        //if the dumpartifact does not exist create and save it to the db
-                        dumpArtifact = new DumpArtifact() { DumpId = dumplingid, Hash = hash, Index = artifact.Indexes.FirstOrDefault()?.Index, LocalPath = localpath, ExecutableImage = false, DebugCritical = false };
-
-                        dumplingDb.DumpArtifacts.Add(dumpArtifact);
-
-                        await dumplingDb.SaveChangesAsync();
-                    }
-                }
-            }
-
-            //if the file doesn't already exist in the database we need to save it and index it
-            if (artifact == null)
-            {
-                string tempPath = null;
-
-                using (var contentStream = await Request.Content.ReadAsStreamAsync())
-                {
-                    tempPath = await UploadContentStreamToFile(contentStream, optoken, hash, Path.GetFileName(localpath).ToLowerInvariant());
-                }
-
-                var processor = new ArtifactProcessor(optoken, HttpContext.Current.Server.MapPath("~/App_Data/temp"), tempPath, hash, dumplingid, localpath, false);
-
-                //begin processing but return before complete this requires the task to be registered to 
-                //prevent pre-emptive appdomain shutdown
-                Task bgProcessing = Task.Factory.StartNew(processor.ProcessAsync).RegisterWithHost();
-            }
-
-            return optoken;
+            return hash;
         }
 
         [Route("api/artifacts/uploads")]
         [HttpPost]
         public async Task<string> UploadArtifact([FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
         {
-            var optoken = GetOperationToken();
+            await StoreArtifactContentAsync(this.Request.Content, hash, null, localpath, cancelToken);
 
-            //if the specified hash is not formatted properly throw an exception
-            if (!ValidateHashFormat(hash))
-            {
-                throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified hash is improperly formatted"));
-            }
-
-            Artifact artifact = null;
-
-            using (DumplingDb dumplingDb = new DumplingDb())
-            {
-                //check if the artifact already exists
-                artifact = await dumplingDb.Artifacts.FindAsync(cancelToken, hash);
-            }
-
-            //if the file doesn't already exist in the database we need to save it and index it
-            if (artifact == null)
-            {
-                string tempPath = null;
-
-                using (var contentStream = await Request.Content.ReadAsStreamAsync())
-                {
-                    tempPath = await UploadContentStreamToFile(contentStream, optoken, hash, Path.GetFileName(localpath).ToLowerInvariant());
-                }
-
-                var processor = new ArtifactProcessor(optoken, HttpContext.Current.Server.MapPath("~/App_Data/temp"), tempPath, hash);
-
-                //begin processing but return before complete this requires the task to be registered to 
-                //prevent pre-emptive appdomain shutdown
-                Task bgProcessing = Task.Factory.StartNew(processor.ProcessAsync).RegisterWithHost();
-            }
-
-            return optoken;
+            return hash;
         }
 
         [Route("api/artifacts/{hash}")]
@@ -558,29 +436,151 @@ namespace dumpling.web.Controllers
         {
             return Guid.NewGuid().ToString("N");
         }
-
-        //we upload the content stream to a persistant temp file using the token and expected hash as path components
-        //the file is persisted so that it can be reprocessed in the even of a service restart during processing
-        //deleting this file is the repsonsibility of the processor, and should only be deleted when processing is complete
-        private static async Task<string> UploadContentStreamToFile(Stream contentStream, string optoken, string expectedHash, string filename)
-        {
-            string root = HttpContext.Current.Server.MapPath("~/App_Data/temp");
-
-            string tempPath = Path.Combine(root, optoken, expectedHash, filename);
-
-            if (!Directory.Exists(Path.GetDirectoryName(tempPath)))
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(tempPath));
-            }
-            
-            using (var file = File.Create(tempPath, BUFF_SIZE, FileOptions.Asynchronous | FileOptions.RandomAccess))
-            {
-                await contentStream.CopyToAsync(file);
-            }
-
-            return tempPath;
-        }
         
+        private async Task StoreArtifactContentAsync(HttpContent content, string hash, string dumpId, string localPath, CancellationToken cancelToken)
+        {
+            //if the specified hash is not formatted properly throw an exception
+            if (!ValidateHashFormat(hash))
+            {
+                throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified hash is improperly formatted"));
+            }
+
+            using (DumplingDb dumplingDb = new DumplingDb())
+            {
+                var artifact = await AddArtifactToDbAsync(dumplingDb, hash, localPath, cancelToken);
+
+                //if the artifact didn't already exist and we added it to the db upload the file
+                if (artifact != null)
+                {
+                    using (var uploaded = await UploadContentValidateHashAsync(content, hash, cancelToken))
+                    {
+                        artifact.CompressedSize = uploaded.Length;
+
+                        uploaded.Position = 0;
+
+                        artifact.Url = await DumplingStorageClient.StoreArtifactAsync(uploaded, hash, artifact.FileName + ".gz", cancelToken);
+
+                        await dumplingDb.SaveChangesAsync(cancelToken);
+                    }
+                }
+
+                //if a dumpId was specified add the dumpartifact entry
+                if (dumpId != null)
+                {
+                    await AddDumpArtifactToDbAsync(dumplingDb, dumpId, localPath, hash, cancelToken);
+                }
+
+            }
+        }
+
+        private async Task<Artifact> AddArtifactToDbAsync(DumplingDb dumplingDb, string hash, string localPath, CancellationToken cancelToken)
+        {
+            using (var opTracker = new TrackedOperation("AddArtifactToDbAsync"))
+            {
+                var artifact = new Artifact()
+                {
+                    Hash = hash,
+                    FileName = Path.GetFileName(localPath),
+                    UploadTime = DateTime.UtcNow,
+                    Format = ArtifactFormat.Unknown,
+                    Uuid = null
+                };
+
+                return await dumplingDb.TryAddAsync(artifact, cancelToken) ? artifact : null;
+            }
+        }
+
+        private async Task<DumpArtifact> AddDumpArtifactToDbAsync(DumplingDb dumplingDb, string dumpId, string localPath, string hash, CancellationToken cancelToken)
+        {
+            using (var opTracker = new TrackedOperation("AddDumpArtifactToDbAsync"))
+            {
+                //if the specified dumpId is not valid throw an exception
+                if (await dumplingDb.Dumps.FindAsync(cancelToken, dumpId) == null)
+                {
+                    throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified dumpling id is invalid."));
+                }
+
+                var dumpArtifact = new DumpArtifact()
+                {
+                    DumpId = dumpId,
+                    LocalPath = localPath,
+                    DebugCritical = true,
+                    ExecutableImage = false,
+                    Hash = hash
+                };
+
+                dumplingDb.DumpArtifacts.AddOrUpdate(dumpArtifact);
+
+                await dumplingDb.SaveChangesAsync(cancelToken);
+
+                return dumpArtifact;
+            }
+        }
+
+        private async Task<Stream> UploadContentValidateHashAsync(HttpContent content, string expectedHash, CancellationToken cancelToken)
+        {
+            using (var opTracker = new TrackedOperation("UploadConentValidateHashAsync"))
+            {
+                string hash = null;
+
+                long length = 0;
+
+                using (var contentStream = await Request.Content.ReadAsStreamAsync())
+                {
+                    var operationMetrics = new Dictionary<string, double>() { { "FileLength", 0 } };
+
+                    //we don't open the temp file in a using statement b/c we need to return to the caller
+                    Stream fileStream = CreateTempFile();
+
+                    try
+                    {
+                        using (var sha1 = SHA1.Create())
+                        {
+                            var buff = new byte[BUFF_SIZE];
+
+                            int cbyte;
+
+                            while ((cbyte = await contentStream.ReadAsync(buff, 0, buff.Length)) > 0)
+                            {
+                                cancelToken.ThrowIfCancellationRequested();
+
+                                length += cbyte;
+
+                                sha1.TransformBlock(buff, 0, cbyte, buff, 0);
+
+                                await fileStream.WriteAsync(buff, 0, cbyte);
+                            }
+
+                            await fileStream.FlushAsync();
+
+                            sha1.TransformFinalBlock(buff, 0, 0);
+
+                            hash = string.Concat(sha1.Hash.Select(b => b.ToString("x2"))).ToLowerInvariant();
+
+                            operationMetrics["FileLength"] = Convert.ToDouble(length);
+                        }
+                    }
+                    //if an exception was thrown while uploading delete the file and rethrow to prevent leaking the incomplete file
+                    catch (Exception)
+                    {
+                        fileStream.Dispose();
+
+                        throw;
+                    }
+
+                    //if the hash doesn't match close the file so it deletes and throw an exception
+                    if (hash != expectedHash)
+                    {
+                        fileStream.Dispose();
+
+                        throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified hash does not match hash of the uploaded content."));
+                    }
+
+                    return fileStream;
+                }
+            }
+        }
+
         private static Stream CreateTempFile(string path = null)
         {
             path = path ?? Path.GetTempFileName();

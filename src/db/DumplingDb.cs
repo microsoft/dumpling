@@ -6,6 +6,7 @@ using System.Data.Entity.Infrastructure;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace dumpling.db
@@ -24,17 +25,27 @@ namespace dumpling.db
         
         public DbSet<Property> Properties { get; set; }
 
-        public async Task<DumpArtifact> TryAddAsync(DumpArtifact dumpArtifact)
+        public async Task<bool> TryAddAsync(DumpArtifact dumpArtifact, CancellationToken cancelToken)
         {
-            return await this.TryAddAsync(this.DumpArtifacts, dumpArtifact, dumpArtifact.DumpId, dumpArtifact.LocalPath);
+            return await this.GetOrAddAsync(dumpArtifact, cancelToken) == dumpArtifact;
         }
 
-        public async Task<Artifact> TryAddAsync(Artifact artifact)
+        public async Task<DumpArtifact> GetOrAddAsync(DumpArtifact dumpArtifact, CancellationToken cancelToken)
         {
-            return await this.TryAddAsync(this.Artifacts, artifact, artifact.Hash);
+            return await this.GetOrAddAsync(cancelToken, this.DumpArtifacts, dumpArtifact, dumpArtifact.DumpId, dumpArtifact.LocalPath);
         }
 
-        private async Task<T> TryAddAsync<T>(DbSet<T> dbSet, T entity, params object[] keys)
+        public async Task<bool> TryAddAsync(Artifact artifact, CancellationToken cancelToken)
+        {
+            return await this.GetOrAddAsync(artifact, cancelToken) == artifact;
+        }
+
+        public async Task<Artifact> GetOrAddAsync(Artifact artifact, CancellationToken cancelToken)
+        {
+            return await this.GetOrAddAsync(cancelToken, this.Artifacts, artifact, artifact.Hash);
+        }
+
+        private async Task<T> GetOrAddAsync<T>(CancellationToken cancelToken, DbSet<T> dbSet, T entity, params object[] keys)
             where T : class
         {
             if (this.ChangeTracker.HasChanges())
@@ -43,7 +54,7 @@ namespace dumpling.db
             }
 
             //try to get find the value first
-            T ret = await dbSet.FindAsync(keys);
+            T ret = await dbSet.FindAsync(cancelToken, keys);
 
             if(ret == null)
             {
@@ -51,7 +62,7 @@ namespace dumpling.db
                 {
                     dbSet.Add(entity);
 
-                    await this.SaveChangesAsync();
+                    await this.SaveChangesAsync(cancelToken);
 
                     ret = entity;
                 }
@@ -59,11 +70,11 @@ namespace dumpling.db
                 {
                     dbSet.Remove(entity);
 
-                    ret = await dbSet.FindAsync(keys);
+                    ret = await dbSet.FindAsync(cancelToken, keys);
                 }
             }
 
-            await this.Entry<T>(ret).ReloadAsync();
+            await this.Entry<T>(ret).ReloadAsync(cancelToken);
 
             return ret;
         }
@@ -77,9 +88,9 @@ namespace dumpling.db
             return sqlEx != null && sqlEx.Errors.OfType<SqlError>().Any(se => se.Number == 2601 || se.Number == 2627 /* PK/UKC violation */);
         }
 
-        public async Task<bool> AddArtifactAsync(Artifact artifact)
+        public async Task<bool> AddArtifactAsync(Artifact artifact, CancellationToken cancelToken)
         {
-            if (await this.TryAddAsync(artifact) == artifact)
+            if (await this.TryAddAsync(artifact, cancelToken))
             {
                 await UpdateIncompleteDumpArtifacts(artifact);
 

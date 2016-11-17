@@ -29,6 +29,7 @@ import subprocess
 import sys
 import errno
 import shutil
+import io
 
 def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
@@ -91,36 +92,30 @@ class Output:
 class FileUtils:
 
     @staticmethod
-    def _hash_and_compress(inpath, outpath):     
+    def _hash(path):
+        hash = hashlib.sha1()
+        with open(path, 'rb') as f:
+            BLOCKSIZE = 1024 * 8
+            buf = f.read(BLOCKSIZE)
+            while len(buf) > 0:
+                hash.update(buf)  
+                buf = f.read(BLOCKSIZE)
+        return hash.hexdigest()
+
+    @staticmethod
+    def _compress_and_hash(inpath, outpath):     
         FileUtils._ensure_parent_dir(outpath)
         with gzip.open(outpath, 'wb') as fComp:
             with open(inpath, 'rb') as fDecomp:
-                BLOCKSIZE = 1024 * 8
-                compsize = 0
-                hash = hashlib.sha1()
-                buf = fDecomp.read(BLOCKSIZE)
-                while len(buf) > 0:
-                    hash.update(buf)
-                    fComp.write(buf)       
-                    buf = fDecomp.read(BLOCKSIZE)
-                fComp.flush() 
-                return hash.hexdigest() 
+                shutil.copyfileobj(fDecomp, fComp)
+        return FileUtils._hash(outpath);
 
     @staticmethod
-    def _hash_and_decompress(inpath, outpath):
+    def _decompress(inpath, outpath):
         FileUtils._ensure_parent_dir(outpath)
         with gzip.open(inpath, 'rb') as fComp:
             with open(outpath, 'wb') as fDecomp:
-                BLOCKSIZE = 1024 * 8
-                compsize = 0
-                hash = hashlib.sha1()
-                buf = fComp.read(BLOCKSIZE)
-                while len(buf) > 0:
-                    hash.update(buf)
-                    fDecomp.write(buf)       
-                    buf = fComp.read(BLOCKSIZE)
-                fDecomp.flush() 
-                return hash.hexdigest() 
+                shutil.copyfileobj(fComp, fDecomp)
 
     @staticmethod    
     def _ensure_parent_dir(path):
@@ -364,19 +359,20 @@ class DumplingService:
     def _stream_compressed_file_from_response(response, hash, path):
         #write the compressed blob to a temp file
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
-        with open(tempPath, 'wb') as fd:
+        hasher = hashlib.sha1()
+        with open(tempPath, 'wb') as fd:    
             for chunk in response.iter_content(1024*8):
+                hasher.update(chunk)
                 fd.write(chunk)
+        downhash = hasher.hexdigest()
         
-        downhash = FileUtils._hash_and_decompress(tempPath, path)
-        
-        os.remove(tempPath)
-
         if downhash != hash:
-            Output.Critical("ERROR: downloaded file did not match expected hash value")
-            os.remove(path)
-        else: 
+            Output.Critical("ERROR: downloaded file did not match expected hash value Expected: %s Actual %s" % (hash, downhash))
+        else:
+            FileUtils._decompress(tempPath, path)
             Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))      
+
+        os.remove(tempPath)
                    
     @staticmethod
     def _stream_file_from_response(response, path):
@@ -497,7 +493,7 @@ class FileTransferManager:
         Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(abspath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
         try:
-            hash = FileUtils._hash_and_compress(abspath, tempPath)
+            hash = FileUtils._compress_and_hash(abspath, tempPath)
             Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
             with open(tempPath, 'rb') as fUpld:
                 self._dumpSvc.UploadArtifact(dumpid, abspath, hash, fUpld)   
@@ -514,7 +510,7 @@ class FileTransferManager:
         Output.Message('processing dump file %s'%(dumppath))
         Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(dumppath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
-        hash = FileUtils._hash_and_compress(dumppath, tempPath)
+        hash = FileUtils._compress_and_hash(dumppath, tempPath)
         Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
         with open(tempPath, 'rb') as fUpld:
             dumpData = self._dumpSvc.UploadDump(dumppath, hash, origin, displayname, fUpld)   
