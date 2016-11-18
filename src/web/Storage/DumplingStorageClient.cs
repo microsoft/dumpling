@@ -1,10 +1,12 @@
-﻿using Microsoft.WindowsAzure.Storage;
+﻿using dumpling.web.telemetry;
+using Microsoft.WindowsAzure.Storage;
 using Microsoft.WindowsAzure.Storage.Blob;
 using System;
 using System.Collections.Generic;
 using System.Configuration;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 
@@ -64,13 +66,26 @@ namespace dumpling.web.Storage
             _supportContainer.CreateIfNotExistsAsync().GetAwaiter().GetResult();
         }
 
-        public static async Task<string> StoreArtifactAsync(Stream stream, string hash, string fileName)
+        public static async Task<string> StoreArtifactAsync(Stream stream, string hash, string fileName, CancellationToken cancelToken)
         {
-            var blob = _instance._artifactContainer.GetBlockBlobReference(hash + "/" + fileName);
+            using (var opTracker = new TrackedOperation("StoreArtifactBlob", new Dictionary<string, string>() { { "Hash", hash } }))
+            {
+                var blob = _instance._artifactContainer.GetBlockBlobReference(hash + "/" + fileName);
 
-            await blob.UploadFromStreamAsync(stream);
+                await blob.UploadFromStreamAsync(stream, cancelToken);
 
-            return blob.Uri.ToString();
+                return blob.Uri.ToString();
+            }
+        }
+
+        public static async Task<bool> DeleteArtifactAsync(string hash, string fileName, CancellationToken cancelToken)
+        {
+            using (var opTracker = new TrackedOperation("DeleteArtifactBlob", new Dictionary<string, string>() { { "Hash", hash } }))
+            {
+                var blob = _instance._artifactContainer.GetBlockBlobReference(hash + "/" + fileName);
+
+                return await blob.DeleteIfExistsAsync(cancelToken);
+            }
         }
     }
 }

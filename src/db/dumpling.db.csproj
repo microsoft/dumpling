@@ -54,6 +54,7 @@
     <Compile Include="Artifact.cs" />
     <Compile Include="ArtifactIndex.cs" />
     <Compile Include="Constants.cs" />
+    <Compile Include="DumplingConfiguration.cs" />
     <Compile Include="DumplingDb.cs" />
     <Compile Include="Failure.cs" />
     <Compile Include="Dump.cs" />

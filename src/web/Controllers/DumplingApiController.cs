@@ -1,17 +1,20 @@
 ﻿using dumpling.db;
 using dumpling.web.Storage;
+using dumpling.web.telemetry;
 using FileFormats;
 using FileFormats.ELF;
 using FileFormats.MachO;
 using FileFormats.Minidump;
 using FileFormats.PDB;
 using FileFormats.PE;
+using Microsoft.ApplicationInsights.Extensibility.Implementation;
 using Microsoft.WindowsAzure.Storage.Blob;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity.Infrastructure;
+using System.Data.Entity.Migrations;
 using System.Data.Entity.Validation;
 using System.IO;
 using System.IO.Compression;
@@ -161,23 +164,26 @@ namespace dumpling.web.Controllers
             }
         }
 
-        [Route("api/dumplings/uploads/")]
-        [HttpPost]
-        public async Task<UploadDumpResponse> UploadDump([FromUri] string hash, [FromUri] string localpath, [FromUri] string origin, [FromUri] string displayName, CancellationToken cancelToken)
+        [Route("api/dumplings/create/")]
+        [HttpGet]
+        public async Task<string> CreateDump([FromUri] string hash, [FromUri] string user, [FromUri] string displayName, CancellationToken cancelToken)
         {
+            //if the specified hash is not formatted properly throw an exception
+            if (!ValidateHashFormat(hash))
+            {
+                throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified hash is improperly formatted"));
+            }
+
             using (DumplingDb dumplingDb = new DumplingDb())
             {
                 var dumpling = await dumplingDb.Dumps.FindAsync(cancelToken, hash);
 
-                //if the specified dump was not found throw an exception 
                 if (dumpling != null)
                 {
-                    return new UploadDumpResponse() { dumplingId = dumpling.DumpId, refPaths = new string[] { } };
+                    return hash;
                 }
 
-                var clientFilesNeeded = new List<string>();
-
-                dumpling = new Dump() { DumpId = hash, User = origin, DisplayName = displayName, DumpTime = DateTime.UtcNow, Os = OS.Unknown };
+                dumpling = new Dump() { DumpId = hash, User = user, DisplayName = displayName, DumpTime = DateTime.UtcNow, Os = OS.Unknown };
 
                 dumplingDb.Dumps.Add(dumpling);
 
@@ -192,82 +198,42 @@ namespace dumpling.web.Controllers
                     //if the specified dump was not found throw an exception 
                     if (dumpling != null)
                     {
-                        return new UploadDumpResponse() { dumplingId = dumpling.DumpId, refPaths = new string[] { } };
+                        return hash;
                     }
 
                     throw;
                 }
 
-                using (var uploader = new DumpArtifactUploader())
-                {
-                    await UploadDumpArtifactAsync(uploader, dumplingDb, dumpling, hash, localpath, true, cancelToken);
-
-                    dumpling.Os = uploader.DumpOS;
-
-                    foreach (var dumpArtifact in uploader.GetLoadedModules(dumpling.DumpId))
-                    {
-                        var artifactIndex = await dumplingDb.ArtifactIndexes.FindAsync(dumpArtifact.Index);
-
-                        if (artifactIndex != null)
-                        {
-                            dumpArtifact.Hash = artifactIndex.Hash;
-                        }
-                        else
-                        {
-                            clientFilesNeeded.Add(dumpArtifact.LocalPath);
-                        }
-
-                        dumpling.DumpArtifacts.Add(dumpArtifact);
-                    }
-
-                    await dumplingDb.SaveChangesAsync();
-                }
-
-                return new UploadDumpResponse() { dumplingId = dumpling.DumpId, refPaths = clientFilesNeeded.ToArray() };
+                return hash;
             }
+
+        }
+
+        [Route("api/dumplings/uploads/")]
+        [HttpPost]
+        public async Task<string> UploadDump([FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
+        {
+            await StoreArtifactContentAsync(this.Request.Content, hash, hash, localpath, cancelToken);
+
+            return hash;
         }
 
         [Route("api/dumplings/{dumplingid}/artifacts/uploads/")]
         [HttpPost]
-        public async Task UploadArtifact(string dumplingid, [FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
+        public async Task<string> UploadArtifact(string dumplingid, [FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
         {
-            using (DumplingDb dumplingDb = new DumplingDb())
-            {
-                var dumpling = await dumplingDb.Dumps.FindAsync(cancelToken, dumplingid);
+            await StoreArtifactContentAsync(this.Request.Content, hash, dumplingid, localpath, cancelToken);
 
-                //if the specified dump was not found throw an exception 
-                if (dumpling == null)
-                {
-                    throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The given dumplingId is invalid"));
-                }
-
-                using (var uploader = new ArtifactUploader())
-                {
-                    var artifact = await UploadDumpArtifactAsync(uploader, dumplingDb, dumpling, hash, localpath, false, cancelToken);
-                }
-
-                await dumplingDb.SaveChangesAsync();
-            }
+            return hash;
         }
 
         [Route("api/artifacts/uploads")]
         [HttpPost]
-        public async Task UploadArtifact([FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
+        public async Task<string> UploadArtifact([FromUri] string hash, [FromUri] string localpath, CancellationToken cancelToken)
         {
-            using (DumplingDb dumplingDb = new DumplingDb())
-            {
-                //check if the artifact already exists
-                var artifact = await dumplingDb.Artifacts.FindAsync(cancelToken, hash);
+            await StoreArtifactContentAsync(this.Request.Content, hash, null, localpath, cancelToken);
 
-                //if the file doesn't already exist in the database we need to save it and index it
-                if (artifact == null)
-                {
-                    using (var uploader = new ArtifactUploader())
-                    {
-                        await UploadArtifactAsync(uploader, dumplingDb, hash, localpath, cancelToken);
-                    }
-                }
-            }
+            return hash;
         }
 
         [Route("api/artifacts/{hash}")]
@@ -448,90 +414,171 @@ namespace dumpling.web.Controllers
             return httpResponse;
         }
 
-        private async Task<Artifact> UploadDumpArtifactAsync(ArtifactUploader uploader, DumplingDb dumplingDb, Dump dump, string hash, string localpath, bool debugCritical, CancellationToken cancelToken)
+        private static bool ValidateHashFormat(string hash)
         {
-            var artifact = await UploadArtifactAsync(uploader, dumplingDb, hash, localpath, cancelToken);
-
-            var dumpArtifact = await dumplingDb.DumpArtifacts.FindAsync(dump.DumpId, localpath);
-
-            if (dumpArtifact == null)
+            if (hash.Length != 40)
             {
-                dumpArtifact = new DumpArtifact()
+                return false;
+            }
+
+            foreach(var c in hash.Select(ch => char.ToLowerInvariant(ch)))
+            {
+                if(!(char.IsDigit(c) || (c >= 'a' && c <= 'f')))
                 {
-                    DumpId = dump.DumpId,
-                    LocalPath = localpath,
-                    DebugCritical = debugCritical
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private string GetOperationToken()
+        {
+            return Guid.NewGuid().ToString("N");
+        }
+        
+        private async Task StoreArtifactContentAsync(HttpContent content, string hash, string dumpId, string localPath, CancellationToken cancelToken)
+        {
+            //if the specified hash is not formatted properly throw an exception
+            if (!ValidateHashFormat(hash))
+            {
+                throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified hash is improperly formatted"));
+            }
+
+            using (DumplingDb dumplingDb = new DumplingDb())
+            {
+                var artifact = await AddArtifactToDbAsync(dumplingDb, hash, localPath, cancelToken);
+
+                //if the artifact didn't already exist and we added it to the db upload the file
+                if (artifact != null)
+                {
+                    using (var uploaded = await UploadContentValidateHashAsync(content, hash, cancelToken))
+                    {
+                        artifact.CompressedSize = uploaded.Length;
+
+                        uploaded.Position = 0;
+
+                        artifact.Url = await DumplingStorageClient.StoreArtifactAsync(uploaded, hash, artifact.FileName + ".gz", cancelToken);
+
+                        await dumplingDb.SaveChangesAsync(cancelToken);
+                    }
+                }
+
+                //if a dumpId was specified add the dumpartifact entry
+                if (dumpId != null)
+                {
+                    await AddDumpArtifactToDbAsync(dumplingDb, dumpId, localPath, hash, cancelToken);
+                }
+
+            }
+        }
+
+        private async Task<Artifact> AddArtifactToDbAsync(DumplingDb dumplingDb, string hash, string localPath, CancellationToken cancelToken)
+        {
+            using (var opTracker = new TrackedOperation("AddArtifactToDbAsync"))
+            {
+                var artifact = new Artifact()
+                {
+                    Hash = hash,
+                    FileName = Path.GetFileName(localPath),
+                    UploadTime = DateTime.UtcNow,
+                    Format = ArtifactFormat.Unknown,
+                    Uuid = null
                 };
 
-                dump.DumpArtifacts.Add(dumpArtifact);
+                return await dumplingDb.TryAddAsync(artifact, cancelToken) ? artifact : null;
             }
-
-            dumpArtifact.Hash = artifact.Hash;
-
-            if (dumpArtifact.Index == null)
-            {
-                dumpArtifact.Index = artifact.Indexes.FirstOrDefault()?.Index;
-            }
-
-            await dumplingDb.SaveChangesAsync();
-
-            return artifact;
         }
 
-        private async Task<Artifact> UploadArtifactAsync(ArtifactUploader uploader, DumplingDb dumplingDb, string hash, string localpath, CancellationToken cancelToken)
+        private async Task<DumpArtifact> AddDumpArtifactToDbAsync(DumplingDb dumplingDb, string dumpId, string localPath, string hash, CancellationToken cancelToken)
         {
-            //check if the artifact already exists
-            var artifact = await dumplingDb.Artifacts.FindAsync(cancelToken, hash);
-
-            //if the file doesn't already exist in the database we need to save it and index it
-            if (artifact == null)
+            using (var opTracker = new TrackedOperation("AddDumpArtifactToDbAsync"))
             {
-                artifact = await UploadAndStoreArtifactAsync(uploader, Path.GetFileName(localpath).ToLowerInvariant(), hash, dumplingDb, cancelToken);
+                //if the specified dumpId is not valid throw an exception
+                if (await dumplingDb.Dumps.FindAsync(cancelToken, dumpId) == null)
+                {
+                    throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified dumpling id is invalid."));
+                }
 
-                await dumplingDb.SaveChangesAsync();
+                var dumpArtifact = new DumpArtifact()
+                {
+                    DumpId = dumpId,
+                    LocalPath = localPath,
+                    DebugCritical = true,
+                    ExecutableImage = false,
+                    Hash = hash
+                };
+
+                dumplingDb.DumpArtifacts.AddOrUpdate(dumpArtifact);
+
+                await dumplingDb.SaveChangesAsync(cancelToken);
+
+                return dumpArtifact;
             }
-
-            return artifact;
         }
 
-        private async Task<Artifact> UploadAndStoreArtifactAsync(ArtifactUploader uploader, string fileName, string expectedHash, DumplingDb dumplingDb, CancellationToken cancelToken)
+        private async Task<Stream> UploadContentValidateHashAsync(HttpContent content, string expectedHash, CancellationToken cancelToken)
         {
-            using (var requestStream = await Request.Content.ReadAsStreamAsync())
+            using (var opTracker = new TrackedOperation("UploadConentValidateHashAsync"))
             {
-                await uploader.UploadStreamAsync(requestStream, fileName, cancelToken);
+                string hash = null;
+
+                long length = 0;
+
+                using (var contentStream = await Request.Content.ReadAsStreamAsync())
+                {
+                    var operationMetrics = new Dictionary<string, double>() { { "FileLength", 0 } };
+
+                    //we don't open the temp file in a using statement b/c we need to return to the caller
+                    Stream fileStream = CreateTempFile();
+
+                    try
+                    {
+                        using (var sha1 = SHA1.Create())
+                        {
+                            var buff = new byte[BUFF_SIZE];
+
+                            int cbyte;
+
+                            while ((cbyte = await contentStream.ReadAsync(buff, 0, buff.Length)) > 0)
+                            {
+                                cancelToken.ThrowIfCancellationRequested();
+
+                                length += cbyte;
+
+                                sha1.TransformBlock(buff, 0, cbyte, buff, 0);
+
+                                await fileStream.WriteAsync(buff, 0, cbyte);
+                            }
+
+                            await fileStream.FlushAsync();
+
+                            sha1.TransformFinalBlock(buff, 0, 0);
+
+                            hash = string.Concat(sha1.Hash.Select(b => b.ToString("x2"))).ToLowerInvariant();
+
+                            operationMetrics["FileLength"] = Convert.ToDouble(length);
+                        }
+                    }
+                    //if an exception was thrown while uploading delete the file and rethrow to prevent leaking the incomplete file
+                    catch (Exception)
+                    {
+                        fileStream.Dispose();
+
+                        throw;
+                    }
+
+                    //if the hash doesn't match close the file so it deletes and throw an exception
+                    if (hash != expectedHash)
+                    {
+                        fileStream.Dispose();
+
+                        throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The specified hash does not match hash of the uploaded content."));
+                    }
+
+                    return fileStream;
+                }
             }
-
-            //if the hash doesn't match the expected hash throw
-            if (uploader.Hash != expectedHash)
-            {
-                throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.BadRequest, "The given hash did not match the SHA1 hash of the uploaded file"));
-            }
-
-            var artifact = new Artifact
-            {
-                Hash = uploader.Hash,
-                Uuid = uploader.Uuid,
-                Format = uploader.Format,
-                FileName = uploader.FileName,
-                Size = uploader.Decompressed.Length,
-                CompressedSize = uploader.Compressed.Length,
-                UploadTime = DateTime.UtcNow
-            };
-
-            artifact.Indexes.Add(new ArtifactIndex() { Index = uploader.Index, Hash = uploader.Hash });
-
-            //otherwise create the file entry in the db
-            await dumplingDb.AddArtifactAsync(artifact);
-
-            await dumplingDb.SaveChangesAsync();
-
-            await dumplingDb.Entry(artifact).GetDatabaseValuesAsync();
-
-            //upload the artifact to blob storage
-            artifact.Url = await DumplingStorageClient.StoreArtifactAsync(uploader.Compressed, uploader.Hash, uploader.CompressedFileName);
-
-            await dumplingDb.SaveChangesAsync();
-            return artifact;
         }
 
         private static Stream CreateTempFile(string path = null)
@@ -550,439 +597,6 @@ namespace dumpling.web.Controllers
             //this file is not disposed of here b/c it is deleted on close
             //callers of this method are responsible for disposing the file
             return File.Create(tempPath, BUFF_SIZE, FileOptions.Asynchronous | FileOptions.DeleteOnClose | FileOptions.RandomAccess);
-        }
-
-        private static async Task<string> DecompAndHashAsync(Stream compressed, Stream decompressed, CancellationToken cancelToken)
-        {
-            string hash = null;
-
-            using (var sha1 = SHA1.Create())
-            using (var gzStream = new GZipStream(compressed, CompressionMode.Decompress, true))
-            {
-                var buff = new byte[BUFF_SIZE];
-
-                int cbyte;
-
-                while ((cbyte = await gzStream.ReadAsync(buff, 0, buff.Length)) > 0 && !cancelToken.IsCancellationRequested)
-                {
-                    sha1.TransformBlock(buff, 0, cbyte, buff, 0);
-
-                    await decompressed.WriteAsync(buff, 0, cbyte);
-                }
-
-                await decompressed.FlushAsync();
-
-                if (!cancelToken.IsCancellationRequested)
-                {
-                    sha1.TransformFinalBlock(buff, 0, 0);
-
-                    hash = string.Concat(sha1.Hash.Select(b => b.ToString("x2"))).ToLowerInvariant();
-                }
-            }
-
-            return hash;
-
-        }
-        private class DumpArtifactUploader : ArtifactUploader
-        {
-            private object _fileFormatReader;
-
-            public DumpArtifactUploader()
-            {
-            }
-
-            public string DumpOS { get; private set; }
-
-            public IList<DumpArtifact> GetLoadedModules(string dumpId)
-            {
-                switch (this.Format)
-                {
-                    case "elfcore":
-                        return ReadELFCoreLoadedModules(dumpId);
-                    default:
-                        return null;
-                }
-            }
-
-            protected override void ComputeFormatAndIndex()
-            {
-                if (IsELFCore())
-                {
-                    Format = ArtifactFormat.ElfCore;
-                    DumpOS = OS.Linux;
-                }
-                else if (IsMinidump())
-                {
-                    Format = ArtifactFormat.Minidump;
-                    DumpOS = OS.Windows;
-                }
-                else if (IsMachCore())
-                {
-                    Format = ArtifactFormat.MachCore;
-                    DumpOS = OS.Mac;
-                }
-                else
-                {
-                    Format = ArtifactFormat.Unknown;
-                    DumpOS = OS.Unknown;
-                }
-                Uuid = Hash;
-                Index = BuildIndexFromModuleUUID(Hash, IndexPrefix.SHA1, FileName);
-            }
-
-            private bool IsELFCore()
-            {
-                try
-                {
-                    var coreFile = new ELFCoreFile(new StreamAddressSpace(Decompressed));
-
-                    //get this property so that it will force the validation of the file format before we allocate anything else
-                    var fileTable = coreFile.FileTable;
-
-                    _fileFormatReader = coreFile;
-
-                    return true;
-                }
-                catch
-                {
-                    return false;
-                }
-            }
-
-            private bool IsMinidump()
-            {
-                try
-                {
-                    return Minidump.IsValidMinidump(new StreamAddressSpace(Decompressed));
-                }
-                catch
-                {
-                    return false;
-                }
-            }
-
-            private bool IsMachCore()
-            {
-                try
-                {
-                    var machCore = new MachCore(new StreamAddressSpace(Decompressed));
-
-                    return machCore.IsValidCoreFile;
-                }
-                catch
-                {
-                    return false;
-                }
-            }
-
-            private IList<DumpArtifact> ReadELFCoreLoadedModules(string dumpId)
-            {
-                try
-                {
-                    var coreFile = _fileFormatReader as ELFCoreFile;
-
-                    //get this property so that it will force the validation of the file format before we allocate anything else
-                    var fileTable = coreFile.FileTable;
-
-                    var dumpArtifacts = new List<DumpArtifact>();
-
-                    foreach (var image in coreFile.LoadedImages)
-                    {
-                        string index = null;
-                        string uuid = null;
-                        bool executableImage = false;
-                        try
-                        {
-                            executableImage = image.Image.Header.Type == ELFHeaderType.Executable;
-
-                            //this call will throw an exception if the loaded image doesn't have a build id.  
-                            //Unfortunately there is no way to check if build id exists without ex
-                            var buildId = image.Image.BuildID;
-
-                            if (buildId != null)
-                            {
-                                uuid = string.Concat(buildId.Select(b => b.ToString("x2"))).ToLowerInvariant();
-
-                                index = BuildIndexFromModuleUUID(uuid, IndexPrefix.Elf, Path.GetFileName(image.Path));
-                            }
-                        }
-                        catch { }
-
-                        dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = image.Path, Index = index, DebugCritical = true, ExecutableImage = executableImage });
-
-                        //if the image is libcoreclr.so also add libmscordaccore.so and libsos.so at the same path
-                        if(Path.GetFileName(image.Path) == "libcoreclr.so")
-                        {
-                            var localDir = Path.GetDirectoryName(image.Path);
-
-                            //currently the dac index and the sos index are not imbedded in libcoreclr.so 
-                            //this should eventually be the case, but for now set the indexes using the buildid from libcoreclr.so
-                            //and we will manually add these indexes to the atifact store
-                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libmscordaccore.so").Replace('\\', '/'), Index = BuildIndexFromModuleUUID(uuid, IndexPrefix.Elf, "libmscordaccore.so"), DebugCritical = true });
-
-                            dumpArtifacts.Add(new DumpArtifact() { DumpId = dumpId, LocalPath = Path.Combine(localDir, "libsos.so").Replace('\\', '/'), Index = BuildIndexFromModuleUUID(uuid, IndexPrefix.Elf, "libsos.so"), DebugCritical = true });
-                        }
-                    }
-
-                    return dumpArtifacts;
-                }
-                catch
-                {
-                    return null;
-                }
-            }
-            
-
-        }
-
-        private class ArtifactUploader : IDisposable
-        {
-            public Stream Compressed { get; protected set; }
-
-            public Stream Decompressed { get; protected set; }
-
-            public string Hash { get; protected set; }
-
-            public string Uuid { get; protected set; }
-
-            public string Index { get; protected set; }
-
-            public string Format { get; protected set; }
-
-            public string FileName { get; protected set; }
-
-            public string CompressedFileName { get { return FileName + ".gz"; } }
-
-            public async Task UploadStreamAsync(Stream stream, string filename, CancellationToken cancelToken)
-            {
-                FileName = filename.ToLowerInvariant();
-                
-                Compressed = CreateTempFile();
-
-                await stream.CopyToAsync(Compressed, BUFF_SIZE, cancelToken);
-
-                await Compressed.FlushAsync();
-
-                Compressed.Position = 0;
-
-                Decompressed = CreateTempFile();
-
-                await DecompAndHashAsync(cancelToken);
-
-                Compressed.Position = 0;
-
-                if(!cancelToken.IsCancellationRequested)
-                {
-                    ComputeFormatAndIndex();
-                }
-
-                Decompressed.Position = 0;
-
-                Compressed.Position = 0;
-            }
-            
-            public void Dispose()
-            {
-                if (this.Compressed != null)
-                {
-                    Compressed.Close();
-                    Compressed.Dispose();
-                }
-
-                if(this.Decompressed != null)
-                {
-                    Decompressed.Close();
-                    Decompressed.Dispose();
-                }
-            }
-
-            protected virtual void ComputeFormatAndIndex()
-            {
-                string uuid;
-
-                string indexPrefix;
-
-                if(TryGetElfIndex(Decompressed, out uuid))
-                {
-                    Format = ArtifactFormat.Elf;
-
-                    indexPrefix = IndexPrefix.Elf;
-                }
-                else if(TryGetPEIndex(Decompressed, out uuid))
-                {
-                    Format = ArtifactFormat.PE;
-
-                    indexPrefix = IndexPrefix.PE;
-                }
-                else if (TryGetPDBIndex(Decompressed, out uuid))
-                {
-                    Format = ArtifactFormat.PDB;
-
-                    indexPrefix = IndexPrefix.PDB;
-                }
-                else
-                {
-                    Format = ArtifactFormat.Unknown;
-
-                    uuid = Hash;
-
-                    indexPrefix = IndexPrefix.SHA1;
-                }
-
-                Uuid = uuid;
-
-                Index = BuildIndexFromModuleUUID(uuid, indexPrefix, FileName);
-            }
-
-
-            protected static string BuildIndexFromModuleUUID(string uuid, string indexPrefix, string filename)
-            {
-                if (string.IsNullOrEmpty(uuid))
-                {
-                    return null;
-                }
-                
-                var key = new StringBuilder();
-
-                key.Append(filename);
-
-                key.Append("/");
-
-                key.Append(indexPrefix);
-                
-                key.Append(uuid);
-
-                key.Append("/");
-
-                key.Append(filename);
-
-                key.Append(".gz");
-
-                return key.ToString();
-            }
-
-            private static bool TryGetElfIndex(Stream stream, out string uuid)
-            {
-                uuid = null;
-
-                try
-                {
-                    var elf = new ELFFile(new StreamAddressSpace(stream));
-
-                    if (!elf.Ident.IsIdentMagicValid.Check())
-                    {
-                        return false;
-                    }
-
-                    if (elf.BuildID == null || elf.BuildID.Length != 20)
-                    {
-                        return false;
-                    }
-                    
-                    uuid = string.Concat(elf.BuildID.Select(b => b.ToString("x2"))).ToLowerInvariant();
-
-                    return true;
-                }
-                catch (InputParsingException)
-                {
-                    return false;
-                }
-
-            }
-            
-            private static bool TryGetPEIndex(Stream stream, out string uuid)
-            {
-                uuid = null;
-
-                StreamAddressSpace fileAccess = new StreamAddressSpace(stream);
-                try
-                {
-                    PEFile reader = new PEFile(fileAccess);
-                    if (!reader.HasValidDosSignature.Check())
-                    {
-                        return false;
-                    }
-
-                    uuid = reader.Timestamp.ToString("x").ToLowerInvariant() + reader.SizeOfImage.ToString("x").ToLowerInvariant();
-                    
-                    return true;
-                }
-                catch (InputParsingException)
-                {
-                    return false;
-                }
-            }
-
-            private static bool TryGetPDBIndex(Stream stream, out string uuid)
-            {
-                uuid = null;
-                try
-                {
-                    PDBFile pdb = new PDBFile(new StreamAddressSpace(stream));
-
-                    if (!pdb.Header.IsMagicValid.Check())
-                    {
-                        return false;
-                    }
-    
-                    uuid = pdb.Signature.ToString().Replace("-", "").ToLowerInvariant() + pdb.Age.ToString("x").ToLowerInvariant();
-                    
-                    return true;
-                }
-                catch (InputParsingException)
-                {
-                    return false;
-                }
-            }
-
-            private async Task DecompAndHashAsync(CancellationToken cancelToken)
-            {
-                this.Hash = await DumplingApiController.DecompAndHashAsync(this.Compressed, this.Decompressed, cancelToken);
-            }
-        }
-
-        private class TempDirectory : IDisposable
-        {
-            private string _basepath;
-
-            public TempDirectory()
-            {
-                string root = HttpContext.Current.Server.MapPath("~/App_Data");
-
-                string _basepath = Path.Combine(root, Path.GetTempFileName());
-
-                Directory.CreateDirectory(_basepath);
-            }
-
-            public string BasePath
-            {
-                get { return _basepath; }
-            }
-
-            public Stream CreateTempFile(string relativePath)
-            {
-                return File.Create(Path.Combine(_basepath, relativePath), BUFF_SIZE, FileOptions.Asynchronous | FileOptions.RandomAccess);
-            }
-
-            public void Dispose()
-            {
-                NukeDir(_basepath);
-            }
-            
-            private void NukeDir(string path)
-            {
-                foreach (var dirpath in Directory.EnumerateDirectories(path))
-                {
-                    NukeDir(dirpath);
-                }
-
-                foreach (var filepath in Directory.EnumerateFiles(path))
-                {
-                    File.Delete(filepath);
-                }
-
-                Directory.Delete(path);
-            }
         }
     }
 }

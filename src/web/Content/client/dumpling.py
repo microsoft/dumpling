@@ -29,6 +29,7 @@ import subprocess
 import sys
 import errno
 import shutil
+import io
 
 def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
@@ -91,36 +92,30 @@ class Output:
 class FileUtils:
 
     @staticmethod
-    def _hash_and_compress(inpath, outpath):     
+    def _hash(path):
+        hash = hashlib.sha1()
+        with open(path, 'rb') as f:
+            BLOCKSIZE = 1024 * 8
+            buf = f.read(BLOCKSIZE)
+            while len(buf) > 0:
+                hash.update(buf)  
+                buf = f.read(BLOCKSIZE)
+        return hash.hexdigest()
+
+    @staticmethod
+    def _compress_and_hash(inpath, outpath):     
         FileUtils._ensure_parent_dir(outpath)
         with gzip.open(outpath, 'wb') as fComp:
             with open(inpath, 'rb') as fDecomp:
-                BLOCKSIZE = 1024 * 8
-                compsize = 0
-                hash = hashlib.sha1()
-                buf = fDecomp.read(BLOCKSIZE)
-                while len(buf) > 0:
-                    hash.update(buf)
-                    fComp.write(buf)       
-                    buf = fDecomp.read(BLOCKSIZE)
-                fComp.flush() 
-                return hash.hexdigest() 
+                shutil.copyfileobj(fDecomp, fComp)
+        return FileUtils._hash(outpath);
 
     @staticmethod
-    def _hash_and_decompress(inpath, outpath):
+    def _decompress(inpath, outpath):
         FileUtils._ensure_parent_dir(outpath)
         with gzip.open(inpath, 'rb') as fComp:
             with open(outpath, 'wb') as fDecomp:
-                BLOCKSIZE = 1024 * 8
-                compsize = 0
-                hash = hashlib.sha1()
-                buf = fComp.read(BLOCKSIZE)
-                while len(buf) > 0:
-                    hash.update(buf)
-                    fDecomp.write(buf)       
-                    buf = fComp.read(BLOCKSIZE)
-                fDecomp.flush() 
-                return hash.hexdigest() 
+                shutil.copyfileobj(fComp, fDecomp)
 
     @staticmethod    
     def _ensure_parent_dir(path):
@@ -293,7 +288,9 @@ class DumplingService:
         DumplingService._stream_compressed_file_from_response(response, hash, downpath)
         
     def UploadDump(self, localpath, hash, origin, displayname, file):    
-        qargs = { 'hash': hash, 'localpath': localpath, 'origin': origin, 'displayname': displayname  }
+        dumplingid = self.CreateDump(hash, origin, displayname)
+
+        qargs = { 'hash': hash, 'localpath': localpath  }
 
         url = self._dumplingUri + 'api/dumplings/uploads?' + str(urllib.urlencode(qargs))
 
@@ -307,8 +304,27 @@ class DumplingService:
                     
         response.raise_for_status()
 
-        return response.json()
+        return { 'dumplingId' : hash, 'opToken' : response.text }
     
+    def CreateDump(self, hash, origin, displayname):
+        qargs = { 'hash': hash, 'user': origin, 'displayname': displayname  }
+
+        url = self._dumplingUri + 'api/dumplings/create?' + str(urllib.urlencode(qargs))
+        
+        Output.Message('creating dumpling dump %s'%(hash))
+
+        Output.Diagnostic('   url: %s'%(url))
+        
+        response = requests.get(url)
+                                     
+        Output.Diagnostic('   response: %s'%(response))
+                    
+        response.raise_for_status()
+
+        return { 'dumplingId' : hash, 'opToken' : response.text }
+
+
+
     def UpdateDumpProperties(self, dumplingid, dictProps):
         url = self._dumplingUri + 'api/dumplings/' + dumplingid + '/properties'
         
@@ -343,19 +359,20 @@ class DumplingService:
     def _stream_compressed_file_from_response(response, hash, path):
         #write the compressed blob to a temp file
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
-        with open(tempPath, 'wb') as fd:
+        hasher = hashlib.sha1()
+        with open(tempPath, 'wb') as fd:    
             for chunk in response.iter_content(1024*8):
+                hasher.update(chunk)
                 fd.write(chunk)
+        downhash = hasher.hexdigest()
         
-        downhash = FileUtils._hash_and_decompress(tempPath, path)
-        
-        os.remove(tempPath)
-
         if downhash != hash:
-            Output.Critical("ERROR: downloaded file did not match expected hash value")
-            os.remove(path)
-        else: 
+            Output.Critical("ERROR: downloaded file did not match expected hash value Expected: %s Actual %s" % (hash, downhash))
+        else:
+            FileUtils._decompress(tempPath, path)
             Output.Message('downloaded artifact %s %s'%(hash, os.path.basename(path)))      
+
+        os.remove(tempPath)
                    
     @staticmethod
     def _stream_file_from_response(response, path):
@@ -476,7 +493,7 @@ class FileTransferManager:
         Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(abspath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
         try:
-            hash = FileUtils._hash_and_compress(abspath, tempPath)
+            hash = FileUtils._compress_and_hash(abspath, tempPath)
             Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
             with open(tempPath, 'rb') as fUpld:
                 self._dumpSvc.UploadArtifact(dumpid, abspath, hash, fUpld)   
@@ -493,7 +510,7 @@ class FileTransferManager:
         Output.Message('processing dump file %s'%(dumppath))
         Output.Diagnostic('uncompressed file size: %s Kb'%(str(os.path.getsize(dumppath) / 1024)))
         tempPath = os.path.join(tempfile.gettempdir(), tempfile.mktemp())
-        hash = FileUtils._hash_and_compress(dumppath, tempPath)
+        hash = FileUtils._compress_and_hash(dumppath, tempPath)
         Output.Diagnostic('compressed file size:   %s Kb'%(str(os.path.getsize(tempPath) / 1024)))
         with open(tempPath, 'rb') as fUpld:
             dumpData = self._dumpSvc.UploadDump(dumppath, hash, origin, displayname, fUpld)   
@@ -525,12 +542,6 @@ class CommandProcessor:
         if not os.path.isfile(os.path.join('dumpling.py', config.installpath)) or config.update:  
             self._dumpSvc.DownloadClientFile('dumpling.py', config.installpath) 
 
-            #if we're executing off a local copy of dumpling.py see if there is a dumpling.config.json next to it
-            installconfigpath = os.path.join(config.installpath, 'dumpling.config.json')
-
-            #if there is a dumpling config and no config is at the install location copy the file.
-            if os.path.isfile(config.configpath) and not os.path.isfile(installconfigpath):
-                shutil.copyfile(config.configpath, installconfigpath)
 
         if platform.system().lower() != 'windows':
             #create the shortcut link                      
@@ -564,6 +575,13 @@ class CommandProcessor:
             #if the analysis.py doesn't exist or update is specified     
             if not os.path.isfile(os.path.join('triage.ini', config.installpath)) or config.update:
                 self._dumpSvc.DownloadClientFile('triage.ini', config.installpath)  
+
+            #if we're executing off a local copy of dumpling.py see if there is a dumpling.config.json next to it
+            installconfigpath = os.path.join(config.installpath, 'dumpling.config.json')
+
+            #if there is a dumpling config and no config is at the install location copy the file.
+            if os.path.isfile(config.configpath) and not os.path.isfile(installconfigpath):
+                shutil.copyfile(config.configpath, installconfigpath)
 
     def Config(self, config):
         if config.action == 'dump':
@@ -623,12 +641,18 @@ class CommandProcessor:
         if config.triage == 'full':
             self._triage_dump(dumpid, config.dumppath, config)
 
-        requestpaths = set(dumpdata['refPaths'])      
+        #the paradigm of how uploading a dump works has changed.  Now that the dump is processed offline after the api 
+        #returns we get back an operation token rather than a list of needed refpaths.  In the future this optoken will fetch
+        #will be used in an api to check the opertions state, at that time we'll need to check the state then load the manifest 
+        #to look for needed files, however since this is not available yet we'll ignore the optoken.
+        requestpaths = set() #set(dumpdata['refPaths'])      
         
         incpaths = set()
           
         if not (config.incpaths is None or len(config.incpaths) == 0):
             incpaths = FileUtils._enumerate_unique_files(config.incpaths)
+            #if the dump file is in the incpaths remove it as it has already been uploaded
+            incpaths.discard(os.path.abspath(config.dumppath))
             requestpaths.difference_update(incpaths)
 
         if len(requestpaths) > 0:
@@ -811,18 +835,22 @@ class CommandProcessor:
         #execute the debugger commands to triage the dump file
         CommandProcessor._load_debugger(config.dbgpath, dbgcmds)
 
-        #load the output of analyze
-        with open(triageOut, 'r') as fTriage:
-            propsDict = json.load(fTriage)
+        #if the debugger wrote out the triage output file as expected load it and update the dump properties
+        if os.path.isfile(triageOut):
+            #load the output of analyze
+            with open(triageOut, 'r') as fTriage:
+                propsDict = json.load(fTriage)
             
-            if len(propsDict) > 0: 
-                self._dumpSvc.UpdateDumpProperties(dumpid, propsDict) 
+                if len(propsDict) > 0: 
+                    self._dumpSvc.UpdateDumpProperties(dumpid, propsDict) 
         
-        #delete the temporary triage props file
-        os.remove(triageOut)
+            #delete the temporary triage props file
+            os.remove(triageOut)
+        #if the debugger did not write the triage output file message and return
+        else:
+            Output.Message('WARNING: Debugger triage analysis failed')
+
             
-
-
     def _download_dump(self, dir, dumpManifest):
         dumplingDir = os.path.join(dir, dumpManifest['displayName'])
             
@@ -887,6 +915,8 @@ class CommandProcessor:
         returncode = proc.returncode
 
         Output.Diagnostic(out)     
+
+        #returncode = subprocess.call(procArgs);
 
         Output.Diagnostic('Debugger exit code %s' % returncode)
 
