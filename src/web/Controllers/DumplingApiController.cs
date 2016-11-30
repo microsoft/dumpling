@@ -67,28 +67,27 @@ namespace dumpling.web.Controllers
         [HttpGet]
         public async Task<Dump> GetDumplingManifest(string dumplingId)
         {
-            using (DumplingDb dumplingDb = new DumplingDb())
+            using (var op1 = new TrackedOperation("GetDumplingManifest"))
             {
-                var dump = await dumplingDb.Dumps.FindAsync(dumplingId);
-
-                if(dump != null)
+                using (DumplingDb dumplingDb = new DumplingDb())
                 {
-                    await dumplingDb.Entry(dump).Reference(d => d.Failure).LoadAsync();
+                    Dump dump = null;
 
-                    await dumplingDb.Entry(dump).Collection(d => d.DumpArtifacts).LoadAsync();
-
-                    foreach (var dumpart in dump.DumpArtifacts)
+                    using (var op2 = new TrackedOperation("FindDumpAsync"))
                     {
-                        if (dumpart.Hash != null)
+                        dump = await dumplingDb.Dumps.FindAsync(dumplingId);
+                    }
+
+                    if (dump != null)
+                    {
+                        using (var op3 = new TrackedOperation("LoadDumpArtifactsAsync"))
                         {
-                            await dumplingDb.Entry(dumpart).Reference(da => da.Artifact).LoadAsync();
+                            await dumplingDb.Entry(dump).Collection(d => d.DumpArtifacts).LoadAsync();
                         }
                     }
 
-                    await dumplingDb.Entry(dump).Collection(d => d.Properties).LoadAsync();
+                    return dump;
                 }
-
-                return dump;
             }
         }
 
