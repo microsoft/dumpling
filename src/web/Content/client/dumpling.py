@@ -170,6 +170,8 @@ class DumplingService:
 
         if osStr == 'linux':
             qargs['distro'] = platform.dist()[0].lower()
+        elif osStr == 'windows':
+            qargs['distro'] = platform.machine().lower()
 
         url = url + urllib.urlencode(qargs)
 
