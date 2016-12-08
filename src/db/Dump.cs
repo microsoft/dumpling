@@ -42,7 +42,8 @@ namespace dumpling.db
         [StringLength(32)]
         [Required]
         public string Os { get; set; }
-        
+
+        [DataMember]
         public string FailureHash { get; set; }
 
         [Required]
@@ -55,12 +56,10 @@ namespace dumpling.db
 
         [DataMember]
         public virtual ICollection<DumpArtifact> DumpArtifacts { get; set; }
-
-        [DataMember]
+        
         public virtual ICollection<Property> Properties { get; set; }
 
         [ForeignKey("FailureHash")]
-        [DataMember]
         public virtual Failure Failure { get; set; }
 
         [Timestamp]
