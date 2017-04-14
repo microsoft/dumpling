@@ -589,7 +589,7 @@ class LastExceptionAnalyzer(AnalysisEngine):
     def analyze(self, dictProps, dictArgs):
         thread = g_dbg.target.GetProcess().GetSelectedThread()
         sos = SosInterpreter()
-        peOut = sos.pe()
+        peOut = sos.pe(True)
         dictProps['LAST_EXCEPTION'] = peOut
         peProps = _str_to_dict(peOut)
         if 'Exception type' in peProps and peProps['Exception type'] is not None:
