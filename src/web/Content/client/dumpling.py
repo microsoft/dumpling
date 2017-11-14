@@ -880,11 +880,11 @@ class CommandProcessor:
 
         return dumplingDir
     
-    def Hang(self,config):
-        CommandProcessor._create_hang_dump(config.pid,config.outpath,config.dbgpath)
+    def Hang(self, config):
+        CommandProcessor._create_hang_dump(config.pid, config.outpath, config.dbgpath)
         process = psutil.Process(int(config.pid))
         for child_process in process.children(recursive=True):
-            CommandProcessor._create_hang_dump(str(child_process.pid),config.outpath,config.dbgpath)
+            CommandProcessor._create_hang_dump(str(child_process.pid), config.outpath, config.dbgpath)
             
     @staticmethod         
     #TODO: Replace this with _load_debugger after refactoring callers
@@ -954,12 +954,16 @@ class CommandProcessor:
             dictProp[key] = val
 
     @staticmethod
-    def _create_hang_dump(pid,outpath,debuggerpath):
+    def _create_hang_dump(pid, outpath, debuggerpath):
         #debuggerpath = "c:/debuggers/cdb.exe"
-        ouputpath = outpath+"\memdum"+pid+".dmp"        
-        command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+ouputpath+';.detach;q"'
-        print "creating dump"
-        os.system(command)
+        osStr = platform.system().lower()
+        if osStr == 'linux':
+            print "work in progress"
+        elif osStr == 'windows':
+            ouputpath = outpath + "\memdum" + pid + ".dmp"        
+            command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+ouputpath+';.detach;q"'
+            print "creating dump"
+            os.system(command)
 
 def _get_default_dbgargs():
     if platform.system().lower() == 'windows':
@@ -1107,7 +1111,7 @@ def _parse_args(argv):
     
     debug_parser.add_argument('--pid', type=str, required=True, help='the pid of the process')   
     
-    debug_parser.add_argument('--dbgpath', type=str, default="c:/debuggers/cdb.exe", help='path to debugger to be used by the dumpling client for creatong dump')
+    debug_parser.add_argument('--dbgpath', type=str, required=True, help='path to debugger to be used by the dumpling client for creatong dump')
                                                  
     debug_parser.add_argument('--outpath', type=str, default=os.getcwd(), help='the path to the directory for memory dump file')     
     
