@@ -881,10 +881,10 @@ class CommandProcessor:
         return dumplingDir
     
     def Hang(self,config):
-        CommandProcessor._create_hang_dump(config.pid,config.outpath,config.debuggerpath)
-        process = psutil.Process(process_pid)
+        CommandProcessor._create_hang_dump(config.pid,config.outpath,config.dbgpath)
+        process = psutil.Process(int(config.pid))
         for child_process in process.children(recursive=True):
-            CommandProcessor._create_hang_dump(config.pid,config.outpath,config.debuggerpath)
+            CommandProcessor._create_hang_dump(str(child_process.pid),config.outpath,config.dbgpath)
             
     @staticmethod         
     #TODO: Replace this with _load_debugger after refactoring callers
@@ -956,8 +956,8 @@ class CommandProcessor:
     @staticmethod
     def _create_hang_dump(pid,outpath,debuggerpath):
         #debuggerpath = "c:/debuggers/cdb.exe"
-        ouputpath = outpath+"memdum"+str(self.process.pid)+".dmp"        
-        command = debuggerpath + " -p "+ str(pid) + " -c " + '".dump /ma '+ouputpath+';.detach;q"'
+        ouputpath = outpath+"\memdum"+pid+".dmp"        
+        command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+ouputpath+';.detach;q"'
         print "creating dump"
         os.system(command)
 
@@ -1107,9 +1107,9 @@ def _parse_args(argv):
     
     debug_parser.add_argument('--pid', type=str, required=True, help='the pid of the process')   
     
-    debug_parser.add_argument('--dbgpath', type=str, default=None, help='path to debugger to be used by the dumpling client for creatong dump')
+    debug_parser.add_argument('--dbgpath', type=str, default="c:/debuggers/cdb.exe", help='path to debugger to be used by the dumpling client for creatong dump')
                                                  
-    debug_parser.add_argument('--outpath', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')     
+    debug_parser.add_argument('--outpath', type=str, default=os.getcwd(), help='the path to the directory for memory dump file')     
     
     parsed_args = parser.parse_args(argv)
 
@@ -1151,3 +1151,5 @@ def main(argv):
 
 if __name__ == '__main__':
     main(sys.argv)
+
+
