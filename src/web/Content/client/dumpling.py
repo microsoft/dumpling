@@ -30,6 +30,7 @@ import sys
 import errno
 import shutil
 import io
+import psutil
 
 def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
@@ -537,6 +538,8 @@ class CommandProcessor:
             self.Install(config)
         elif config.command == 'debug':
             self.Debug(config)
+        elif config.command == 'hang':
+            self.Hang(config)
      
     def Install(self, config):
         
@@ -877,6 +880,12 @@ class CommandProcessor:
 
         return dumplingDir
     
+    def Hang(self,config):
+        CommandProcessor._create_hang_dump(config.pid,config.outpath,config.debuggerpath)
+        process = psutil.Process(process_pid)
+        for child_process in process.children(recursive=True):
+            CommandProcessor._create_hang_dump(config.pid,config.outpath,config.debuggerpath)
+            
     @staticmethod         
     #TODO: Replace this with _load_debugger after refactoring callers
     def _load_dump_in_debugger(debuggerPath, debuggerCommands):
@@ -943,6 +952,14 @@ class CommandProcessor:
     def _add_key_if_not_exists(dictProp, key, val):
         if not key in dictProp:
             dictProp[key] = val
+
+    @staticmethod
+    def _create_hang_dump(pid,outpath,debuggerpath):
+        #debuggerpath = "c:/debuggers/cdb.exe"
+        ouputpath = outpath+"memdum"+str(self.process.pid)+".dmp"        
+        command = debuggerpath + " -p "+ str(pid) + " -c " + '".dump /ma '+ouputpath+';.detach;q"'
+        print "creating dump"
+        os.system(command)
 
 def _get_default_dbgargs():
     if platform.system().lower() == 'windows':
@@ -1084,7 +1101,15 @@ def _parse_args(argv):
 
     debug_parser.add_argument('--dbgpath', type=str, default=None, help='path to debugger to be used by the dumpling client for debugging and triage')
                                                  
-    debug_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')    
+    debug_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')
+
+    debug_parser = subparsers.add_parser('hang', parents=[sharedparser], help='Creating the dump for the hang or timeout process')   
+    
+    debug_parser.add_argument('--pid', type=str, required=True, help='the pid of the process')   
+    
+    debug_parser.add_argument('--dbgpath', type=str, default=None, help='path to debugger to be used by the dumpling client for creatong dump')
+                                                 
+    debug_parser.add_argument('--outpath', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')     
     
     parsed_args = parser.parse_args(argv)
 
@@ -1126,6 +1151,3 @@ def main(argv):
 
 if __name__ == '__main__':
     main(sys.argv)
-
-
-
