@@ -955,12 +955,10 @@ class CommandProcessor:
 
     @staticmethod
     def _create_hang_dump(pid, outpath, debuggerpath):
-        #debuggerpath = "c:/debuggers/cdb.exe"
-        #debuggerpath = "createdump"
         osStr = platform.system().lower()
         command = ""
         if osStr == 'linux':
-            command = "./" + debuggerpath + " " + pid
+            command = "./" + debuggerpath + " " + pid + " --name " + outpath + "\memdum" + pid + ".dmp"
         elif osStr == 'windows':
             ouputpath = outpath + "\memdum" + pid + ".dmp"        
             command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+ouputpath+';.detach;q"'
