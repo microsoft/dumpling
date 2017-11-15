@@ -960,15 +960,15 @@ class CommandProcessor:
         if osStr == 'linux':
             command = "./" + debuggerpath + " " + pid + " --name " + outpath + "\memdum" + pid + ".dmp"
         elif osStr == 'windows':
-            ouputpath = outpath + "\memdum" + pid + ".dmp"        
-            command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+ouputpath+';.detach;q"'
+            outputpath = outpath + "\memdum" + pid + ".dmp"        
+            command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+outputpath+';.detach;q"'
         else:
             return
 
         print "creating dump"
-        try:
-            os.system(command)
-        except:
+        status = os.system(command)
+        
+        if status == 1:
             print "Not able to create dump for process " + pid
 
 def _get_default_dbgargs():
