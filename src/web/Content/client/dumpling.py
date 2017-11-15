@@ -956,14 +956,22 @@ class CommandProcessor:
     @staticmethod
     def _create_hang_dump(pid, outpath, debuggerpath):
         #debuggerpath = "c:/debuggers/cdb.exe"
+        #debuggerpath = "createdump"
         osStr = platform.system().lower()
+        command = ""
         if osStr == 'linux':
-            print "work in progress"
+            command = "./" + debuggerpath + " " + pid
         elif osStr == 'windows':
             ouputpath = outpath + "\memdum" + pid + ".dmp"        
             command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+ouputpath+';.detach;q"'
-            print "creating dump"
+        else:
+            return
+
+        print "creating dump"
+        try:
             os.system(command)
+        except:
+            print "Not able to create dump for process " + pid
 
 def _get_default_dbgargs():
     if platform.system().lower() == 'windows':
