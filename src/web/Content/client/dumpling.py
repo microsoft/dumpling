@@ -881,10 +881,13 @@ class CommandProcessor:
         return dumplingDir
     
     def Hang(self, config):
-        CommandProcessor._create_hang_dump(config.pid, config.outpath, config.dbgpath)
-        process = psutil.Process(int(config.pid))
-        for child_process in process.children(recursive=True):
-            CommandProcessor._create_hang_dump(str(child_process.pid), config.outpath, config.dbgpath)
+        if os.path.exists(config.dbgpath) and os.path.isdir(config.outpath):
+            CommandProcessor._create_hang_dump(config.pid, config.outpath, config.dbgpath)
+            process = psutil.Process(int(config.pid))
+            for child_process in process.children(recursive=True):
+                CommandProcessor._create_hang_dump(str(child_process.pid), config.outpath, config.dbgpath)
+        else:
+            print "Invalid Debugger Path or Output path"
             
     @staticmethod         
     #TODO: Replace this with _load_debugger after refactoring callers
@@ -966,10 +969,10 @@ class CommandProcessor:
             return
 
         print "creating dump"
-        status = os.system(command)
-        
-        if status == 1:
-            print "Not able to create dump for process " + pid
+        try:
+            subprocess.call("command")
+        except OSError as e:
+            print "Not able to create Dump for process " + pid, e        
 
 def _get_default_dbgargs():
     if platform.system().lower() == 'windows':
@@ -1117,7 +1120,7 @@ def _parse_args(argv):
     
     debug_parser.add_argument('--pid', type=str, required=True, help='the pid of the process')   
     
-    debug_parser.add_argument('--dbgpath', type=str, required=True, help='path to debugger to be used by the dumpling client for creatong dump')
+    debug_parser.add_argument('--dbgpath', type=str, required=True, help='path to debugger to be used by the dumpling client for creating dump')
                                                  
     debug_parser.add_argument('--outpath', type=str, default=os.getcwd(), help='the path to the directory for memory dump file')     
     
