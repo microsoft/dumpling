@@ -970,7 +970,7 @@ class CommandProcessor:
 
         print "creating dump"
         try:
-            subprocess.call("command")
+            subprocess.call(command)
         except OSError as e:
             print "Not able to create Dump for process " + pid, e        
 
