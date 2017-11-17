@@ -972,9 +972,9 @@ class CommandProcessor:
         Output.Message("creating dump")
         try:
             return_code = subprocess.call(command)
-            Output.Diagnostic('Debugger exit code %s' % returncode)
+            Output.Diagnostic('Debugger exit code %s' % return_code)
         except OSError as e:
-            Output.Critical("Not able to create Dump for process " + pid, e)        
+            Output.Critical('Not able to create Dump for process %s %s' %(pid, e))        
 
 def _get_default_dbgargs():
     if platform.system().lower() == 'windows':
