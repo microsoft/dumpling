@@ -967,6 +967,7 @@ class CommandProcessor:
             outputpath = outpath + "\memdum" + pid + ".dmp"        
             command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+outputpath+';.detach;q"'
         else:
+            Output.Critical('Hang Operation not supported on %s' % osStr)
             return
 
         Output.Message("creating dump")
