@@ -887,7 +887,8 @@ class CommandProcessor:
             for child_process in process.children(recursive=True):
                 CommandProcessor._create_hang_dump(str(child_process.pid), config.outpath, config.dbgpath)
         else:
-            print "Invalid Debugger Path or Output path"
+            path = config.dbgpath if os.path.exists(config.outpath) else config.outpath
+            Output.Critical('Invalid Path %s' % path)
             
     @staticmethod         
     #TODO: Replace this with _load_debugger after refactoring callers
@@ -968,11 +969,12 @@ class CommandProcessor:
         else:
             return
 
-        print "creating dump"
+        Output.Message("creating dump")
         try:
-            subprocess.call(command)
+            return_code = subprocess.call(command)
+            Output.Diagnostic('Debugger exit code %s' % returncode)
         except OSError as e:
-            print "Not able to create Dump for process " + pid, e        
+            Output.Critical("Not able to create Dump for process " + pid, e)        
 
 def _get_default_dbgargs():
     if platform.system().lower() == 'windows':
