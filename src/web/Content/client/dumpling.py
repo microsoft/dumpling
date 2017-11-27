@@ -30,6 +30,7 @@ import sys
 import errno
 import shutil
 import io
+import psutil
 
 def _json_format(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ': '))
@@ -537,6 +538,8 @@ class CommandProcessor:
             self.Install(config)
         elif config.command == 'debug':
             self.Debug(config)
+        elif config.command == 'hang':
+            self.Hang(config)
      
     def Install(self, config):
         
@@ -877,6 +880,16 @@ class CommandProcessor:
 
         return dumplingDir
     
+    def Hang(self, config):
+        if os.path.exists(config.dbgpath) and os.path.isdir(config.outpath):
+            CommandProcessor._create_hang_dump(config.pid, config.outpath, config.dbgpath)
+            process = psutil.Process(int(config.pid))
+            for child_process in process.children(recursive=True):
+                CommandProcessor._create_hang_dump(str(child_process.pid), config.outpath, config.dbgpath)
+        else:
+            path = config.dbgpath if os.path.exists(config.outpath) else config.outpath
+            Output.Critical('Invalid Path %s' % path)
+            
     @staticmethod         
     #TODO: Replace this with _load_debugger after refactoring callers
     def _load_dump_in_debugger(debuggerPath, debuggerCommands):
@@ -943,6 +956,26 @@ class CommandProcessor:
     def _add_key_if_not_exists(dictProp, key, val):
         if not key in dictProp:
             dictProp[key] = val
+
+    @staticmethod
+    def _create_hang_dump(pid, outpath, debuggerpath):
+        osStr = platform.system().lower()
+        command = ""
+        if osStr == 'linux':
+            command = "./" + debuggerpath + " " + pid + " --name " + outpath + "\memdum" + pid + ".dmp"
+        elif osStr == 'windows':
+            outputpath = outpath + "\memdum" + pid + ".dmp"        
+            command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+outputpath+';.detach;q"'
+        else:
+            Output.Critical('Hang Operation not supported on %s' % osStr)
+            return
+
+        Output.Message("creating dump")
+        try:
+            return_code = subprocess.call(command)
+            Output.Diagnostic('Debugger exit code %s' % return_code)
+        except OSError as e:
+            Output.Critical('Not able to create Dump for process %s %s' %(pid, e))        
 
 def _get_default_dbgargs():
     if platform.system().lower() == 'windows':
@@ -1084,7 +1117,15 @@ def _parse_args(argv):
 
     debug_parser.add_argument('--dbgpath', type=str, default=None, help='path to debugger to be used by the dumpling client for debugging and triage')
                                                  
-    debug_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')    
+    debug_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')
+
+    debug_parser = subparsers.add_parser('hang', parents=[sharedparser], help='Creating the dump for the hang or timeout process')   
+    
+    debug_parser.add_argument('--pid', type=str, required=True, help='the pid of the process')   
+    
+    debug_parser.add_argument('--dbgpath', type=str, required=True, help='path to debugger to be used by the dumpling client for creating dump')
+                                                 
+    debug_parser.add_argument('--outpath', type=str, default=os.getcwd(), help='the path to the directory for memory dump file')     
     
     parsed_args = parser.parse_args(argv)
 
@@ -1126,6 +1167,5 @@ def main(argv):
 
 if __name__ == '__main__':
     main(sys.argv)
-
 
 
