@@ -615,7 +615,6 @@ class CommandProcessor:
                 self._filequeue.QueueFileUpload(config.dumpid, f)
 
     def Upload(self, config):
-        
         dumpid = None
         
         #if nothing was specified to upload
@@ -880,36 +879,45 @@ class CommandProcessor:
 
         return dumplingDir
     
-    def HangCheck(self, Config):
-        if Config.upload:
-            HangAndUpload(self, config)
+    def HangCheck(self, config):
+        if config.upload:
+            self.HangAndUpload(config)
         else:
-            Hang(self, config)
+            self.Hang(config)
 
     def Hang(self, config):
-        if os.path.exists(config.dbgpath) and os.path.isdir(config.outpath):
-            CommandProcessor._create_hang_dump(config.pid, config.outpath, config.dbgpath)
+        if os.path.exists(config.dbgpath) and os.path.isdir(config.outpath):            
             process = psutil.Process(int(config.pid))
-            parent_dump_folder = os.path.join(config.outpath, "process"+str(config.pid))
+            parent_dump_folder = os.path.join(config.outpath, "process" + str(config.pid))
 
             if not os.path.exists(parent_dump_folder):
                 os.makedirs(parent_dump_folder)
             else:
                 shutil.rmtree(parent_dump_folder)
+                os.makedirs(parent_dump_folder)
 
+            CommandProcessor._create_hang_dump(config.pid, parent_dump_folder, config.dbgpath)
             for child_process in process.children(recursive=True):
                 CommandProcessor._create_hang_dump(str(child_process.pid), config.outpath, parent_dump_folder)
         else:
             path = config.dbgpath if os.path.exists(config.outpath) else config.outpath
             Output.Critical('Invalid Path %s' % path)
 
-    def HungAndUpload(self, config)
-        Hang(self, config)
-        config.dumppath = parent_dump_folder
-        dump_file_name = "memdump" + str(pid) + ".dmp"
-        config.incpaths = os.path.join(parent_dump_folder, dump_file_name)
-        config.displayname = HungProcess + str(pid);
-        Upload(self, config)    
+    def HangAndUpload(self, config):
+        self.Hang(config)
+        parent_dump_folder = os.path.join(config.outpath, "process" + str(config.pid))
+        
+        if config.incpaths is None:
+            config.incpaths = [parent_dump_folder]
+        
+        if config.dumppath is None:
+            dump_file_name = "memdump" + str(config.pid) + ".dmp"
+            config.dumppath = os.path.join(parent_dump_folder, dump_file_name)
+        
+        if config.displayname is None:
+            config.displayname = "HungProcess" + str(config.pid);
+        
+        self.Upload(config)    
 
     @staticmethod         
     #TODO: Replace this with _load_debugger after refactoring callers
@@ -1140,16 +1148,30 @@ def _parse_args(argv):
                                                  
     debug_parser.add_argument('--downdir', type=str, default=os.getcwd(), help='the path to the directory to download the specified content')
 
-    debug_parser = subparsers.add_parser('hang', parents=[sharedparser], help='Creating the dump for the hang or timeout process')   
+    hung_parser = subparsers.add_parser('hang', parents=[sharedparser], help='Creating the dump for the hang or timeout process')   
     
-    debug_parser.add_argument('--pid', type=str, required=True, help='the pid of the process')   
+    hung_parser.add_argument('--pid', type=str, required=True, help='the pid of the process')   
     
-    debug_parser.add_argument('--dbgpath', type=str, required=True, help='path to debugger to be used by the dumpling client for creating dump')
+    hung_parser.add_argument('--dbgpath', type=str, required=True, help='path to debugger to be used by the dumpling client for creating dump')
                                                  
-    debug_parser.add_argument('--outpath', type=str, default=os.getcwd(), help='the path to the directory for memory dump file')
+    hung_parser.add_argument('--outpath', type=str, default=os.getcwd(), help='the path to the directory for memory dump file')
 
-    debug_parser.add_argument('--upload', type=bool, default=False, help='the path to the directory for memory dump file')      
+    hung_parser.add_argument('--upload', type=bool, default=False, help='the path to the directory for memory dump file')
+
+    hung_parser.add_argument('--user', type=str, default=getpass.getuser().lower(), help='The username to pass to the dumpling service.  This argument is ignored unless --dumppath is specified')     
     
+    hung_parser.add_argument('--triage', choices=['none', 'client', 'full'], default='client', help='specifies the triage info to be uploadeded with the dump')
+
+    hung_parser.add_argument('--properties', nargs='*', type=_parse_key_value_pair, help='a list of properties to be associated with the dump in the format key=value', metavar='key=value')  
+                                         
+    hung_parser.add_argument('--propfile', type=argparse.FileType('r'), help='path to a file containing a json serialized dictionary of property value paires')
+
+    hung_parser.add_argument('--dumppath', type=str, help='path to the dumpfile to be uploaded')
+                                        
+    hung_parser.add_argument('--displayname', type=str, default=None, help='the name to be displayed in reports for the uploaded dump.  This argument is ignored unless --dumppath is specified')
+
+    hung_parser.add_argument('--incpaths', nargs='*', type=str, help='paths to files or directories to be included in the upload')
+
     parsed_args = parser.parse_args(argv)
 
     config = DumplingConfig.Load(parsed_args.configpath) or DumplingConfig({ })
