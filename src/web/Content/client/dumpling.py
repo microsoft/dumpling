@@ -888,13 +888,13 @@ class CommandProcessor:
     def Hang(self, config):
         if os.path.exists(config.dbgpath) and os.path.isdir(config.outpath):            
             process = psutil.Process(int(config.pid))
-            parent_dump_folder = os.path.join(config.outpath, "process" + str(config.pid))
+            name = process.name()
+            parent_dump_folder = os.path.join(config.outpath, "process" + name + "." + str(config.pid))
 
-            if not os.path.exists(parent_dump_folder):
-                os.makedirs(parent_dump_folder)
-            else:
+            if os.path.exists(parent_dump_folder):
                 shutil.rmtree(parent_dump_folder)
-                os.makedirs(parent_dump_folder)
+
+            os.makedirs(parent_dump_folder)
 
             CommandProcessor._create_hang_dump(config.pid, parent_dump_folder, config.dbgpath)
             for child_process in process.children(recursive=True):
@@ -905,17 +905,19 @@ class CommandProcessor:
 
     def HangAndUpload(self, config):
         self.Hang(config)
-        parent_dump_folder = os.path.join(config.outpath, "process" + str(config.pid))
-        
+        process = psutil.Process(int(config.pid))
+        name = process.name()
+        parent_dump_folder = os.path.join(config.outpath, "process" + name + "." + str(config.pid))
+
         if config.incpaths is None:
             config.incpaths = [parent_dump_folder]
         
         if config.dumppath is None:
-            dump_file_name = "memdump" + str(config.pid) + ".dmp"
+            dump_file_name = "memdump." + name + "." + str(config.pid) + ".dmp"
             config.dumppath = os.path.join(parent_dump_folder, dump_file_name)
         
         if config.displayname is None:
-            config.displayname = "HungProcess" + str(config.pid);
+            config.displayname = "Hung" + name + str(config.pid);
         
         self.Upload(config)    
 
@@ -989,11 +991,13 @@ class CommandProcessor:
     @staticmethod
     def _create_hang_dump(pid, outpath, debuggerpath):
         osStr = platform.system().lower()
+        process = psutil.Process(int(pid))
+        name = process.name()
         command = ""
         if osStr == 'linux':
-            command = "./" + debuggerpath + " " + pid + " --name " + outpath + "\memdump" + pid + ".dmp"
+            command = "./" + debuggerpath + " " + pid + " --name " + outpath + "\memdump" + name + "." + pid + ".dmp"
         elif osStr == 'windows':
-            outputpath = outpath + "\memdump" + pid + ".dmp"        
+            outputpath = outpath + "\memdump." + name + "." + pid + ".dmp"        
             command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+outputpath+';.detach;q"'
         else:
             Output.Critical('Hang Operation not supported on %s' % osStr)
@@ -1126,7 +1130,7 @@ def _parse_args(argv):
     
     update_parser.add_argument('--properties', nargs='*', type=_parse_key_value_pair, help='a list of properties and values to be associated with the dump in the format property=value', metavar='property=value')  
     
-    update_parser.add_argument('--propfile', type=argparse.FileType('r'), help='path to a file containing a json serialized dictionary of property value paires')
+    update_parser.add_argument('--propfile', type=argparse.FileType('r'), help='path to a file containing a json serialized dictionary of property value pairs')
 
     update_parser.add_argument('--incpaths', nargs='*', type=str, help='paths to files or directories to be associated with the specified dump')
     
@@ -1160,11 +1164,11 @@ def _parse_args(argv):
 
     hung_parser.add_argument('--user', type=str, default=getpass.getuser().lower(), help='The username to pass to the dumpling service.  This argument is ignored unless --dumppath is specified')     
     
-    hung_parser.add_argument('--triage', choices=['none', 'client', 'full'], default='client', help='specifies the triage info to be uploadeded with the dump')
+    hung_parser.add_argument('--triage', choices=['none', 'client', 'full'], default='client', help='specifies the triage info to be uploaded with the dump')
 
     hung_parser.add_argument('--properties', nargs='*', type=_parse_key_value_pair, help='a list of properties to be associated with the dump in the format key=value', metavar='key=value')  
                                          
-    hung_parser.add_argument('--propfile', type=argparse.FileType('r'), help='path to a file containing a json serialized dictionary of property value paires')
+    hung_parser.add_argument('--propfile', type=argparse.FileType('r'), help='path to a file containing a json serialized dictionary of property value pairs')
 
     hung_parser.add_argument('--dumppath', type=str, help='path to the dumpfile to be uploaded')
                                         
