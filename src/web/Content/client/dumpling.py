@@ -539,7 +539,7 @@ class CommandProcessor:
         elif config.command == 'debug':
             self.Debug(config)
         elif config.command == 'hang':
-            self.HangCheck(config)
+            self.Hang(config)
      
     def Install(self, config):
         
@@ -878,12 +878,6 @@ class CommandProcessor:
         self._filequeue.WaitForPendingTransfers();
 
         return dumplingDir
-    
-    def HangCheck(self, config):
-        if config.upload:
-            self.HangAndUpload(config)
-        else:
-            self.Hang(config)
 
     def Hang(self, config):
         if os.path.exists(config.dbgpath) and os.path.isdir(config.outpath):            
@@ -902,24 +896,6 @@ class CommandProcessor:
         else:
             path = config.dbgpath if os.path.exists(config.outpath) else config.outpath
             Output.Critical('Invalid Path %s' % path)
-
-    def HangAndUpload(self, config):
-        self.Hang(config)
-        process = psutil.Process(int(config.pid))
-        name = process.name()
-        parent_dump_folder = os.path.join(config.outpath, "process" + name + "." + str(config.pid))
-
-        if config.incpaths is None:
-            config.incpaths = [parent_dump_folder]
-        
-        if config.dumppath is None:
-            dump_file_name = "memdump." + name + "." + str(config.pid) + ".dmp"
-            config.dumppath = os.path.join(parent_dump_folder, dump_file_name)
-        
-        if config.displayname is None:
-            config.displayname = "Hung" + name + str(config.pid);
-        
-        self.Upload(config)    
 
     @staticmethod         
     #TODO: Replace this with _load_debugger after refactoring callers
@@ -1008,7 +984,7 @@ class CommandProcessor:
             return_code = subprocess.call(command)
             Output.Diagnostic('Debugger exit code %s' % return_code)
         except OSError as e:
-            Output.Critical('Not able to create Dump for process %s %s' %(pid, e))        
+            Output.Critical('Not able to create Dump for process %s %s' %(pid, e))
 
 def _get_default_dbgargs():
     if platform.system().lower() == 'windows':
@@ -1159,22 +1135,6 @@ def _parse_args(argv):
     hung_parser.add_argument('--dbgpath', type=str, required=True, help='path to debugger to be used by the dumpling client for creating dump')
                                                  
     hung_parser.add_argument('--outpath', type=str, default=os.getcwd(), help='the path to the directory for memory dump file')
-
-    hung_parser.add_argument('--upload', type=bool, default=False, help='the path to the directory for memory dump file')
-
-    hung_parser.add_argument('--user', type=str, default=getpass.getuser().lower(), help='The username to pass to the dumpling service.  This argument is ignored unless --dumppath is specified')     
-    
-    hung_parser.add_argument('--triage', choices=['none', 'client', 'full'], default='client', help='specifies the triage info to be uploaded with the dump')
-
-    hung_parser.add_argument('--properties', nargs='*', type=_parse_key_value_pair, help='a list of properties to be associated with the dump in the format key=value', metavar='key=value')  
-                                         
-    hung_parser.add_argument('--propfile', type=argparse.FileType('r'), help='path to a file containing a json serialized dictionary of property value pairs')
-
-    hung_parser.add_argument('--dumppath', type=str, help='path to the dumpfile to be uploaded')
-                                        
-    hung_parser.add_argument('--displayname', type=str, default=None, help='the name to be displayed in reports for the uploaded dump.  This argument is ignored unless --dumppath is specified')
-
-    hung_parser.add_argument('--incpaths', nargs='*', type=str, help='paths to files or directories to be included in the upload')
 
     parsed_args = parser.parse_args(argv)
 
