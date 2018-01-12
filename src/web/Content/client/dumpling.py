@@ -883,7 +883,7 @@ class CommandProcessor:
         if os.path.exists(config.dbgpath) and os.path.isdir(config.outpath):            
             process = psutil.Process(int(config.pid))
             name = process.name()
-            parent_dump_folder = os.path.join(config.outpath, "process" + name + "." + str(config.pid))
+            parent_dump_folder = os.path.join(config.outpath, name + "." + str(config.pid))
 
             if os.path.exists(parent_dump_folder):
                 shutil.rmtree(parent_dump_folder)
@@ -971,9 +971,9 @@ class CommandProcessor:
         name = process.name()
         command = ""
         if osStr == 'linux':
-            command = "./" + debuggerpath + " " + pid + " --name " + outpath + "\memdump" + name + "." + pid + ".dmp"
+            command = "./" + debuggerpath + " " + pid + " --name " + outpath + "\\" + name + "." + pid + ".dmp"
         elif osStr == 'windows':
-            outputpath = outpath + "\memdump." + name + "." + pid + ".dmp"        
+            outputpath = outpath + "\\" + name + "." + pid + ".dmp"
             command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+outputpath+';.detach;q"'
         else:
             Output.Critical('Hang Operation not supported on %s' % osStr)
