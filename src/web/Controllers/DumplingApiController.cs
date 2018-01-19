@@ -331,7 +331,7 @@ namespace dumpling.web.Controllers
                     using (var compStream = CreateTempFile())
                     {
                         await blob.DownloadToStreamAsync(compStream, cancelToken);
-
+                        compStream.Position = 0;
                         using (var gunzipStream = new GZipStream(compStream, CompressionMode.Decompress, false))
                         {
                             await gunzipStream.CopyToAsync(tempStream);
