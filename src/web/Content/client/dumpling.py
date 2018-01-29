@@ -71,6 +71,9 @@ class Output:
         
             # sometimes amend our essential output to an existing log file.
             if Output.s_logPath is not None:
+                parent_directory = os.path.dirname(Output.s_logPath)
+                if not os.path.exists(parent_directory):
+                    os.makedirs(parent_directory)
                 with open(Output.s_logPath, 'a') as log_file:
                     log_file.write(output + '\n')
         finally:
