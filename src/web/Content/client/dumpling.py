@@ -73,7 +73,7 @@ class Output:
             if(Output.s_logPath is not None and os.path.isfile(Output.s_logPath)):
                 # Note: The file must exist.
                 with open(Output.s_logPath, 'a') as log_file:
-                    log_file.write(output)
+                    log_file.write(output + '\n')
         finally:
             Output.s_lock.release()
      
@@ -889,9 +889,11 @@ class CommandProcessor:
                 shutil.rmtree(parent_dump_folder)
 
             os.makedirs(parent_dump_folder)
-
+            Output.Message("Parent Process %s" % config.pid)
             CommandProcessor._create_hang_dump(config.pid, parent_dump_folder, config.dbgpath)
+
             for child_process in process.children(recursive=True):
+                Output.Message("Child Process %s" % child_process.pid)
                 CommandProcessor._create_hang_dump(str(child_process.pid), config.outpath, parent_dump_folder)
         else:
             path = config.dbgpath if os.path.exists(config.outpath) else config.outpath
@@ -979,7 +981,7 @@ class CommandProcessor:
             Output.Critical('Hang Operation not supported on %s' % osStr)
             return
 
-        Output.Message("creating dump")
+        Output.Message("Creating dump for %s" % pid)
         try:
             return_code = subprocess.call(command)
             Output.Diagnostic('Debugger exit code %s' % return_code)
