@@ -70,8 +70,7 @@ class Output:
                 print output
         
             # sometimes amend our essential output to an existing log file.
-            if(Output.s_logPath is not None and os.path.isfile(Output.s_logPath)):
-                # Note: The file must exist.
+            if Output.s_logPath is not None:
                 with open(Output.s_logPath, 'a') as log_file:
                     log_file.write(output + '\n')
         finally:
