@@ -999,7 +999,7 @@ def _get_default_dbgargs():
 class DumplingConfig:
 
     s_unsaved_args = { 'action', 'command', 'configpath', 'verbose', 'squelch', 'noprompt' }
-    s_default_args = { 'url': 'https://dumpling.azurewebsites.net/', 'installpath': os.path.join(os.path.expanduser('~'), '.dumpling'), 'dbgargs': _get_default_dbgargs() }
+    s_default_args = { 'url': 'https://dumpling.int-dot.net/', 'installpath': os.path.join(os.path.expanduser('~'), '.dumpling'), 'dbgargs': _get_default_dbgargs() }
     def __init__(self, dictConfig):
         self.__dict__ = copy.copy(DumplingConfig.s_default_args)
 
