@@ -896,7 +896,7 @@ class CommandProcessor:
 
             for child_process in process.children(recursive=True):
                 Output.Message("Child Process %s" % child_process.pid)
-                CommandProcessor._create_hang_dump(str(child_process.pid), config.outpath, parent_dump_folder)
+                CommandProcessor._create_hang_dump(str(child_process.pid), parent_dump_folder, config.dbgpath)
         else:
             path = config.dbgpath if os.path.exists(config.outpath) else config.outpath
             Output.Critical('Invalid Path %s' % path)
@@ -978,7 +978,7 @@ class CommandProcessor:
             command = "./" + debuggerpath + " " + pid + " --name " + outpath + "\\" + name + "." + pid + ".dmp"
         elif osStr == 'windows':
             outputpath = outpath + "\\" + name + "." + pid + ".dmp"
-            command = debuggerpath + " -p "+ pid + " -c " + '".dump /ma '+outputpath+';.detach;q"'
+            command = debuggerpath + " -p "+ pid + " -c " + '".dump /mA '+outputpath+';.detach;q"'
         else:
             Output.Critical('Hang Operation not supported on %s' % osStr)
             return
