@@ -1,0 +1,9 @@
+{
+    "dbgargs": [
+        "-z",
+        "$(dumppath)"
+    ],
+    "dbgpath": "C:\\dumpling\\dbg\\cdb.exe",
+    "installpath": "C:\\Users\\anagniho\\.dumpling",
+    "url": "https://dumpling.int-dot.net/"
+}
